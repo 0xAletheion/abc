@@ -15,23 +15,19 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     throw 'npm is not installed or is not on PATH.'
 }
 
-$ChromePaths = @(
-    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
-    "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
-)
-if (-not ($ChromePaths | Where-Object { Test-Path $_ })) {
-    throw 'Google Chrome was not found. Install Chrome before running the local monitor.'
-}
-
 Write-Host 'Installing Node dependencies...'
 npm install
 
 if (-not $SkipBootstrap) {
     Write-Host ''
-    Write-Host 'Opening a dedicated Chrome profile for a one-time manual basket check.'
-    Write-Host 'This does not use or modify your normal Chrome profile.'
-    node '.\local\local-monitor.mjs' --bootstrap
+    Write-Host 'Starting ordinary Chrome with a fresh dedicated Rakuten profile.'
+    Write-Host 'Chrome is launched directly by PowerShell, without Playwright launch flags or --no-sandbox.'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'start-chrome.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The dedicated ordinary Chrome session could not be started.'
+    }
+
+    node '.\local\local-monitor-cdp.mjs' --bootstrap
     if ($LASTEXITCODE -ne 0) {
         throw 'The bootstrap browser check did not complete successfully. Review artifacts-local\result.json.'
     }
@@ -57,7 +53,7 @@ if (-not $SkipSchedule) {
 
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
     Write-Host "Installed hourly Windows task: $TaskName"
-    Write-Host 'It runs only while you are logged into Windows and uses a dedicated Chrome profile.'
+    Write-Host 'It runs only while you are logged into Windows and uses an ordinary Chrome session with a dedicated profile.'
 }
 
 Write-Host ''
