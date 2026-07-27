@@ -20,21 +20,21 @@ npm install
 
 if (-not $SkipBootstrap) {
     Write-Host ''
-    Write-Host 'Starting ordinary Chrome with a fresh dedicated Rakuten profile.'
+    Write-Host 'Starting ordinary Chrome with the dedicated Rakuten profile.'
     Write-Host 'Chrome is launched directly by PowerShell, without Playwright launch flags or --no-sandbox.'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'start-chrome.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw 'The dedicated ordinary Chrome session could not be started.'
     }
 
-    node '.\local\local-monitor-cdp.mjs' --bootstrap
+    node '.\local\local-monitor-cdp-v2.mjs' --bootstrap
     if ($LASTEXITCODE -ne 0) {
         throw 'The bootstrap browser check did not complete successfully. Review artifacts-local\result.json.'
     }
 }
 
 Write-Host ''
-Write-Host 'Running the first automated local basket test...'
+Write-Host 'Running the first automated local availability test...'
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-local.ps1')
 $FirstRunExit = $LASTEXITCODE
 if ($FirstRunExit -ne 0) {
