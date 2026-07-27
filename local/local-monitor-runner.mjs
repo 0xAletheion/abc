@@ -76,4 +76,9 @@ if (process.env.RAKUTEN_KEEP_ITEM === '1') {
 
 const generatedPath = path.join(directory, '.local-monitor-cdp-v2-runtime.mjs');
 await fs.writeFile(generatedPath, runtimeSource);
-await import(`${pathToFileURL(generatedPath).href}?run=${Date.now()}`);
+
+if (process.env.RAKUTEN_PATCH_ONLY === '1') {
+  console.log(`Generated patched monitor: ${generatedPath}`);
+} else {
+  await import(`${pathToFileURL(generatedPath).href}?run=${Date.now()}`);
+}
