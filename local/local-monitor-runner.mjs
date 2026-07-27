@@ -6,13 +6,30 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const sourcePath = path.join(directory, 'local-monitor-cdp-v2.mjs');
 const source = await fs.readFile(sourcePath, 'utf8');
 
-const oldQuantityReader = `async function readQuantity(page) {
+const newQuantityReader = String.raw`async function readQuantity(page) {
+  const labelledQuantity = /(?:quantity|数量|個数)\s*[:：]?\s*(\d+)/i;
+
+  // Rakuten's visible basket text contains "数量: 1". Read this first so
+  // unrelated numeric controls elsewhere on the page cannot be mistaken for
+  // the basket quantity.
+  const pageText = (await bodyText(page)).replace(/\s+/g, ' ');
+  const textMatch = pageText.match(labelledQuantity);
+  if (textMatch) {
+    const quantity = parseQuantity(textMatch[1]);
+    if (quantity !== null) {
+      result.diagnostics.push('Quantity read from labelled page text: ' + quantity + '.');
+      return quantity;
+    }
+  }
+
+  // Fallback: inspect only controls explicitly labelled as quantity controls.
   const controls = page.locator([
-    'select[name*="quantity" i]', 'select[id*="quantity" i]',
-    'select[name*="qty" i]', 'select[id*="qty" i]',
-    'input[name*="quantity" i]', 'input[id*="quantity" i]',
-    'input[name*="qty" i]', 'input[id*="qty" i]',
-    'select', 'input[type="number"]'
+    'select[name*="quantity" i]', 'select[id*="quantity" i]', 'select[aria-label*="quantity" i]',
+    'select[name*="qty" i]', 'select[id*="qty" i]', 'select[aria-label*="qty" i]',
+    'select[aria-label*="数量"]', 'select[aria-label*="個数"]',
+    'input[name*="quantity" i]', 'input[id*="quantity" i]', 'input[aria-label*="quantity" i]',
+    'input[name*="qty" i]', 'input[id*="qty" i]', 'input[aria-label*="qty" i]',
+    'input[aria-label*="数量"]', 'input[aria-label*="個数"]'
   ].join(','));
 
   for (let index = 0; index < await controls.count(); index++) {
@@ -22,94 +39,26 @@ const oldQuantityReader = `async function readQuantity(page) {
       let raw = await control.inputValue().catch(() => '');
       if (!raw) raw = await control.locator('option:checked').textContent().catch(() => '');
       const quantity = parseQuantity(raw);
-      if (quantity !== null) return quantity;
-    } catch {}
-  }
-
-  const text = await bodyText(page);
-  const match = text.match(/(?:quantity|数量|個数)\\s*[:：]?\\s*(\\d+)/i);
-  return match ? parseQuantity(match[1]) : null;
-}`;
-
-const newQuantityReader = `async function readQuantity(page) {
-  const labelledQuantity = /(?:quantity|数量|個数)\\s*[:：]?\\s*(\\d+)/i;
-
-  const selects = page.locator('select');
-  for (let index = 0; index < await selects.count(); index++) {
-    const control = selects.nth(index);
-    try {
-      if (!await control.isVisible()) continue;
-
-      const selectedText = ((await control.locator('option:checked').textContent().catch(() => '')) || '')
-        .replace(/\\s+/g, ' ')
-        .trim();
-      const directMatch = selectedText.match(labelledQuantity);
-      if (directMatch) {
-        const quantity = parseQuantity(directMatch[1]);
-        if (quantity !== null) {
-          result.diagnostics.push(\`Quantity read from labelled selected option: \${quantity}.\`);
-          return quantity;
-        }
-      }
-
-      const metadata = await control.evaluate(element => {
-        const attributes = [
-          element.getAttribute('aria-label'),
-          element.getAttribute('name'),
-          element.getAttribute('id')
-        ].filter(Boolean).join(' ');
-
-        let node = element;
-        let surroundingText = '';
-        for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
-          const text = (node.innerText || '').replace(/\\s+/g, ' ').trim();
-          if (text && text.length <= 500) surroundingText += \` \${text}\`;
-        }
-        return { attributes, surroundingText };
-      });
-
-      const labelledContext = \`\${metadata.attributes} \${metadata.surroundingText}\`;
-      if (/(?:quantity|数量|個数|qty)/i.test(labelledContext)) {
-        const quantity = parseQuantity(selectedText || await control.inputValue().catch(() => ''));
-        if (quantity !== null) {
-          result.diagnostics.push(\`Quantity read from labelled select control: \${quantity}.\`);
-          return quantity;
-        }
-      }
-    } catch {}
-  }
-
-  const inputs = page.locator([
-    'input[name*="quantity" i]', 'input[id*="quantity" i]', 'input[aria-label*="quantity" i]',
-    'input[name*="qty" i]', 'input[id*="qty" i]', 'input[aria-label*="qty" i]',
-    'input[aria-label*="数量"]', 'input[aria-label*="個数"]'
-  ].join(','));
-
-  for (let index = 0; index < await inputs.count(); index++) {
-    const control = inputs.nth(index);
-    try {
-      if (!await control.isVisible()) continue;
-      const quantity = parseQuantity(await control.inputValue().catch(() => ''));
       if (quantity !== null) {
-        result.diagnostics.push(\`Quantity read from labelled input control: \${quantity}.\`);
+        result.diagnostics.push('Quantity read from explicitly labelled control: ' + quantity + '.');
         return quantity;
       }
     } catch {}
   }
 
-  const text = (await bodyText(page)).replace(/\\s+/g, ' ');
-  const match = text.match(labelledQuantity);
-  const quantity = match ? parseQuantity(match[1]) : null;
-  if (quantity !== null) result.diagnostics.push(\`Quantity read from labelled page text: \${quantity}.\`);
-  return quantity;
+  return null;
 }`;
 
-const quantityOccurrences = source.split(oldQuantityReader).length - 1;
-if (quantityOccurrences !== 1) {
-  throw new Error(`Expected one legacy quantity reader in local-monitor-cdp-v2.mjs, found ${quantityOccurrences}.`);
+const startMarker = 'async function readQuantity(page) {';
+const endMarker = '\nasync function verifyConfirmation(page) {';
+const startIndex = source.indexOf(startMarker);
+const endIndex = source.indexOf(endMarker, startIndex);
+
+if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
+  throw new Error('Could not locate the readQuantity function boundaries in local-monitor-cdp-v2.mjs.');
 }
 
-let runtimeSource = source.replace(oldQuantityReader, newQuantityReader);
+let runtimeSource = source.slice(0, startIndex) + newQuantityReader + source.slice(endIndex);
 
 if (process.env.RAKUTEN_KEEP_ITEM === '1') {
   const cleanupCall = 'await removeVerifiedItem(outcome.page);';
