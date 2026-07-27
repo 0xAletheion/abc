@@ -14,7 +14,7 @@ try {
         throw "Dedicated Chrome startup failed with exit code $LASTEXITCODE."
     }
 
-    & node '.\local\local-monitor-cdp.mjs' *>> $LogPath
+    & node '.\local\local-monitor-cdp-v2.mjs' *>> $LogPath
     $ExitCode = $LASTEXITCODE
 }
 catch {
