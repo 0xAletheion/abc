@@ -17,7 +17,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -64,7 +64,7 @@ jobs:
               process.env.GBP_TRIGGER === 'true' ? 'assumed-coupon price below £135' : null
             ].filter(Boolean).join(' and ');
             const body = [
-              'W33 has been confirmed as selectable from the rendered Rakuten page, with an active purchase control.',
+              'W33 has been confirmed in the Rakuten basket as FCP-1110W, ONE WASH, size 33, quantity at least 1.',
               '',
               `- Listed price: ¥${Number(process.env.LISTED_JPY).toLocaleString('en-GB')}`,
               `- Assumed coupon: ¥1,000`,
@@ -109,9 +109,9 @@ jobs:
           script: |
             const title = 'Rakuten monitor needs attention';
             const body = [
-              'The rendered-page monitor could not complete one or more required stages.',
+              'The rendered-page monitor could not complete one or more required stages after its retry sequence.',
               '',
-              `Inspect the uploaded screenshot and result.json here: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              `Inspect the uploaded screenshots, retry history and result.json here: https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             ].join('\n');
 
             const existing = await github.paginate(github.rest.issues.listForRepo, {
