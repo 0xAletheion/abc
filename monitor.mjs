@@ -70,6 +70,14 @@ async function fetchJpyPerGbp() {
   throw new Error('Unable to retrieve a valid GBP/JPY rate');
 }
 
+async function safeScreenshot(page, path) {
+  try {
+    await page.screenshot({ path, fullPage: true, timeout: 10_000 });
+  } catch (error) {
+    result.diagnostics.push(`Screenshot skipped (${path}): ${error.message}`);
+  }
+}
+
 async function clickFirstVisible(locator, description) {
   const count = await locator.count();
   for (let i = 0; i < count; i++) {
@@ -206,7 +214,7 @@ async function main() {
   try {
     await page.goto(PRODUCT_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await page.waitForTimeout(5_000);
-    await page.screenshot({ path: 'artifacts/page-initial.png', fullPage: true });
+    await safeScreenshot(page, 'artifacts/page-initial.png');
 
     const bodyText = await page.locator('body').innerText();
     if (!bodyText.includes('FCP-1110W') && !bodyText.includes('Fullcount Jeans 1110')) {
@@ -233,7 +241,7 @@ async function main() {
     result.w33.selection_attempted = true;
     result.w33.selector_used = selectorUsed;
     await page.waitForTimeout(1_500);
-    await page.screenshot({ path: 'artifacts/page-after-size33.png', fullPage: true });
+    await safeScreenshot(page, 'artifacts/page-after-size33.png');
 
     const addToCart = await clickFirstVisible(
       page.getByText(/Add to cart|買い物かごに入れる|かごに追加/i),
@@ -243,11 +251,11 @@ async function main() {
     if (!addToCart) throw new Error('Size 33 was selected, but no active Add to cart control was available');
 
     await page.waitForTimeout(3_000);
-    await page.screenshot({ path: 'artifacts/page-after-add.png', fullPage: true });
+    await safeScreenshot(page, 'artifacts/page-after-add.png');
 
     result.w33.basket_opened = await openShoppingBasket(page);
     if (!result.w33.basket_opened) throw new Error('Add to cart was clicked, but the Shopping basket page could not be opened');
-    await page.screenshot({ path: 'artifacts/page-basket.png', fullPage: true });
+    await safeScreenshot(page, 'artifacts/page-basket.png');
 
     const basketText = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
     result.w33.product_confirmed = /FCP-1110W|Fullcount Jeans 1110|Fullcount.*1110/i.test(basketText);
@@ -280,7 +288,7 @@ async function main() {
     result.alert_triggered = result.w33.genuinely_available && (result.price_trigger_met || result.gbp_trigger_met);
   } catch (error) {
     result.error = error.stack || error.message;
-    try { await page.screenshot({ path: 'artifacts/page-error.png', fullPage: true }); } catch {}
+    await safeScreenshot(page, 'artifacts/page-error.png');
   } finally {
     await fs.writeFile('artifacts/result.json', JSON.stringify(result, null, 2));
     await browser.close();
