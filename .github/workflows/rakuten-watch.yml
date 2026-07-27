@@ -34,8 +34,14 @@ jobs:
           node --check local/local-monitor.mjs
           node --check local/local-monitor-cdp.mjs
           node --check local/local-monitor-cdp-v2.mjs
+          node --check local/local-monitor-runner.mjs
           node --check monitor-cart.mjs
           node --check retry-monitor.mjs
+
+          $env:RAKUTEN_PATCH_ONLY = '1'
+          node local/local-monitor-runner.mjs
+          Remove-Item Env:RAKUTEN_PATCH_ONLY
+          node --check local/.local-monitor-cdp-v2-runtime.mjs
 
           $files = @(
             'local/setup-local.ps1',
