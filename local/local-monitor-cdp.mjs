@@ -17,7 +17,7 @@ const BOOTSTRAP = process.argv.includes('--bootstrap');
 
 const result = {
   checked_at: new Date().toISOString(),
-  environment: 'ordinary-chrome-cdp',
+  environment: 'ordinary-chrome-cdp-direct-purchase',
   product_url: PRODUCT_URL,
   listed_price_jpy: null,
   assumed_coupon_jpy: ASSUMED_COUPON_JPY,
@@ -30,8 +30,8 @@ const result = {
   w33: {
     colour_selected: false,
     size_selected: false,
-    cart_button_clicked: false,
-    basket_opened: false,
+    purchase_button_clicked: false,
+    confirmation_page_opened: false,
     product_confirmed: false,
     colour_confirmed: false,
     size_confirmed: false,
@@ -54,6 +54,10 @@ function parseQuantity(value) {
   if (!match) return null;
   const quantity = Number(match[0]);
   return Number.isInteger(quantity) && quantity >= 0 && quantity <= 99 ? quantity : null;
+}
+
+async function bodyText(page) {
+  return await page.locator('body').innerText().catch(() => '');
 }
 
 async function safeScreenshot(page, name) {
@@ -85,13 +89,11 @@ async function acquireLock() {
       return;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-
       const contents = await fs.readFile(LOCK_FILE, 'utf8').catch(() => '');
       const lockedPid = Number(contents.split(/\r?\n/)[0]);
       if (processIsAlive(lockedPid)) {
         throw new Error(`Another local Rakuten monitor run is already active (PID ${lockedPid}).`);
       }
-
       result.diagnostics.push(`Removed stale monitor lock for PID ${lockedPid || 'unknown'}.`);
       await fs.rm(LOCK_FILE, { force: true });
     }
@@ -102,10 +104,6 @@ async function acquireLock() {
 
 async function releaseLock() {
   await fs.rm(LOCK_FILE, { force: true }).catch(() => {});
-}
-
-async function bodyText(page) {
-  return await page.locator('body').innerText().catch(() => '');
 }
 
 async function classifyRakutenFailure(page) {
@@ -130,7 +128,6 @@ async function openProductWithRetry(page) {
     await page.waitForTimeout(4_000);
     const failure = await classifyRakutenFailure(page);
     if (!failure) return;
-
     result.diagnostics.push(`Rakuten ${failure} page detected on attempt ${attempt}.`);
     if (failure === 'security-block') {
       throw new Error('Rakuten blocked the ordinary Chrome session at its security edge (Reference #18 page).');
@@ -142,7 +139,6 @@ async function openProductWithRetry(page) {
 
 async function humanClick(page, locator, description) {
   const count = await locator.count();
-
   for (let index = 0; index < count; index++) {
     const candidate = locator.nth(index);
     try {
@@ -150,9 +146,7 @@ async function humanClick(page, locator, description) {
       await candidate.scrollIntoViewIfNeeded();
       const box = await candidate.boundingBox();
       if (!box) continue;
-      const x = box.x + box.width / 2;
-      const y = box.y + box.height / 2;
-      await page.mouse.move(x, y, { steps: 8 });
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 8 });
       await page.waitForTimeout(140);
       await page.mouse.down();
       await page.waitForTimeout(100);
@@ -163,7 +157,6 @@ async function humanClick(page, locator, description) {
       result.diagnostics.push(`${description} candidate ${index + 1} failed: ${error.message}`);
     }
   }
-
   return null;
 }
 
@@ -194,10 +187,11 @@ async function selectVariant(page) {
   throw new Error('Size 33 could not be selected.');
 }
 
-async function findBestCartButton(page) {
+async function clickPurchaseProcedure(page) {
   const candidates = page.locator('button,[role="button"],a').filter({
-    hasText: /^(?:\s*Add to cart\s*|\s*かごに追加\s*|\s*買い物かごに入れる\s*)$/i
+    hasText: /^(?:\s*購入手続きへ\s*|\s*購入手続き\s*|\s*Proceed to purchase\s*|\s*Purchase procedure\s*)$/i
   });
+
   const count = await candidates.count();
   let best = null;
   let bestScore = -Infinity;
@@ -206,19 +200,10 @@ async function findBestCartButton(page) {
     const candidate = candidates.nth(index);
     try {
       if (!await candidate.isVisible() || !await candidate.isEnabled()) continue;
-      const score = await candidate.evaluate(element => {
-        let node = element;
-        let score = 0;
-        for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
-          const text = (node.innerText || '').replace(/\s+/g, ' ');
-          if (/ONE WASH/i.test(text)) score += 5;
-          if (/(?:SIZE|サイズ)\s*[:：]?\s*33\b/i.test(text)) score += 8;
-          if (/30,580/.test(text)) score += 2;
-          if (text.length > 5_000) score -= 4;
-        }
-        return score;
-      });
-      result.diagnostics.push(`Cart button candidate ${index + 1} score=${score}.`);
+      const box = await candidate.boundingBox();
+      if (!box) continue;
+      const score = box.width * box.height + (box.x > 700 ? 100_000 : 0);
+      result.diagnostics.push(`Purchase-procedure candidate ${index + 1} score=${Math.round(score)}.`);
       if (score > bestScore) {
         bestScore = score;
         best = candidate;
@@ -226,50 +211,41 @@ async function findBestCartButton(page) {
     } catch {}
   }
 
-  return best;
-}
+  if (!best) throw new Error('No active 購入手続きへ / Proceed to purchase control was found.');
 
-async function addToCart(page) {
-  const button = await findBestCartButton(page);
-  if (!button) throw new Error('No usable Add to cart button was found.');
+  const oldUrl = page.url();
+  const clicked = await humanClick(page, best, '購入手続きへ / Proceed to purchase');
+  result.w33.purchase_button_clicked = Boolean(clicked);
+  if (!clicked) throw new Error('The 購入手続きへ / Proceed to purchase control could not be clicked.');
 
-  const responsePromise = page.waitForResponse(
-    response => /cart|basket|purchase|order|item/i.test(response.url()),
-    { timeout: 12_000 }
-  ).catch(() => null);
-
-  const clicked = await humanClick(page, button, 'the selected-variant Add to cart button');
-  result.w33.cart_button_clicked = Boolean(clicked);
-  if (!clicked) throw new Error('The selected-variant Add to cart button could not be clicked.');
-
-  const response = await responsePromise;
-  if (response) result.diagnostics.push(`Cart-related response: ${response.status()} ${response.url()}`);
+  await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
   await page.waitForTimeout(3_000);
+  result.diagnostics.push(`Purchase navigation: ${oldUrl} -> ${page.url()}`);
 }
 
-async function openBasket(page) {
-  const candidates = [
-    page.getByRole('link', { name: /Shopping basket|買い物かご|ショッピングカート/i }),
-    page.locator('a').filter({ hasText: /Shopping basket|買い物かご|ショッピングカート/i }),
-    page.locator('a[href*="basket" i],a[href*="cart" i]')
-  ];
+async function chooseConfirmationPage(context) {
+  let bestPage = null;
+  let bestScore = -Infinity;
 
-  for (const locator of candidates) {
-    const clicked = await humanClick(page, locator, 'Shopping basket');
-    if (!clicked) continue;
-    await page.waitForLoadState('domcontentloaded', { timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(2_500);
-    const text = await bodyText(page);
-    if (/Shopping basket|買い物かご|ショッピングカート|Purchase procedure/i.test(text)) {
-      result.w33.basket_opened = true;
-      return;
+  for (const page of context.pages()) {
+    const text = (await bodyText(page)).replace(/\s+/g, ' ');
+    let score = 0;
+    if (/FCP-1110W|Fullcount Jeans 1110|フルカウント.*1110/i.test(text)) score += 10;
+    if (/COLOR\s*[:：]?\s*ONE WASH/i.test(text)) score += 10;
+    if (/SIZE\s*[:：]?\s*33\b/i.test(text)) score += 10;
+    if (/(?:quantity|数量|個数)\s*[:：]?\s*\d+/i.test(text)) score += 8;
+    if (/買い物かご|Shopping basket|Purchase procedure|購入手続き/i.test(text)) score += 4;
+    if (score > bestScore) {
+      bestScore = score;
+      bestPage = page;
     }
   }
 
-  throw new Error('Shopping basket could not be opened.');
+  result.diagnostics.push(`Confirmation-page selection score=${bestScore}.`);
+  return bestPage;
 }
 
-async function readBasketQuantity(page) {
+async function readQuantity(page) {
   const controls = page.locator([
     'select[name*="quantity" i]', 'select[id*="quantity" i]',
     'select[name*="qty" i]', 'select[id*="qty" i]',
@@ -278,8 +254,7 @@ async function readBasketQuantity(page) {
     'select', 'input[type="number"]'
   ].join(','));
 
-  const count = await controls.count();
-  for (let index = 0; index < count; index++) {
+  for (let index = 0; index < await controls.count(); index++) {
     const control = controls.nth(index);
     try {
       if (!await control.isVisible()) continue;
@@ -295,17 +270,18 @@ async function readBasketQuantity(page) {
   return match ? parseQuantity(match[1]) : null;
 }
 
-async function verifyBasket(page) {
-  const basketText = (await bodyText(page)).replace(/\s+/g, ' ');
-  if (/商品情報が変更されました|product information has changed/i.test(basketText)) {
-    throw new Error('Rakuten rejected the local cart submission as stale product information.');
+async function verifyConfirmation(page) {
+  const text = (await bodyText(page)).replace(/\s+/g, ' ');
+  if (/商品情報が変更されました|product information has changed/i.test(text)) {
+    throw new Error('Rakuten rejected the selected product as stale product information.');
   }
 
-  result.w33.product_confirmed = /FCP-1110W|Fullcount Jeans 1110|Fullcount.*1110/i.test(basketText);
-  result.w33.colour_confirmed = /COLOR\s*[:：]?\s*ONE WASH/i.test(basketText);
-  result.w33.size_confirmed = /SIZE\s*[:：]?\s*33\b/i.test(basketText);
-  result.w33.quantity = await readBasketQuantity(page);
+  result.w33.product_confirmed = /FCP-1110W|Fullcount Jeans 1110|フルカウント.*1110/i.test(text);
+  result.w33.colour_confirmed = /COLOR\s*[:：]?\s*ONE WASH/i.test(text);
+  result.w33.size_confirmed = /SIZE\s*[:：]?\s*33\b/i.test(text);
+  result.w33.quantity = await readQuantity(page);
   result.w33.quantity_confirmed = Number.isInteger(result.w33.quantity) && result.w33.quantity >= 1;
+  result.w33.confirmation_page_opened = result.w33.product_confirmed;
   result.w33.genuinely_available =
     result.w33.product_confirmed &&
     result.w33.colour_confirmed &&
@@ -313,30 +289,28 @@ async function verifyBasket(page) {
     result.w33.quantity_confirmed;
 
   result.diagnostics.push(
-    `Basket verification: product=${result.w33.product_confirmed}, colour=${result.w33.colour_confirmed}, size=${result.w33.size_confirmed}, quantity=${result.w33.quantity}`
+    `Confirmation verification: product=${result.w33.product_confirmed}, colour=${result.w33.colour_confirmed}, size=${result.w33.size_confirmed}, quantity=${result.w33.quantity}`
   );
 
   if (!result.w33.genuinely_available) {
-    throw new Error('Basket did not confirm FCP-1110W / ONE WASH / size 33 with quantity at least 1.');
+    throw new Error('Confirmation page did not show FCP-1110W / ONE WASH / size 33 with quantity at least 1.');
   }
 }
 
 async function removeVerifiedItem(page) {
-  const deleteCandidates = [
-    page.getByRole('button', { name: /Delete|削除/i }),
-    page.getByText(/^(?:Delete|削除)$/i)
+  const candidates = [
+    page.getByRole('button', { name: /Delete|削除する|削除/i }),
+    page.getByText(/^(?:Delete|削除する|削除)$/i)
   ];
-
-  for (const locator of deleteCandidates) {
-    const clicked = await humanClick(page, locator, 'Delete basket item');
+  for (const locator of candidates) {
+    const clicked = await humanClick(page, locator, 'Delete confirmed item');
     if (clicked) {
-      result.diagnostics.push('Removed the verified item from the dedicated monitor basket.');
+      result.diagnostics.push('Removed the verified item from the dedicated profile.');
       await page.waitForTimeout(1_000);
       return;
     }
   }
-
-  result.diagnostics.push('Could not remove the verified item; the dedicated profile basket may retain it.');
+  result.diagnostics.push('Could not remove the verified item; it may remain in the dedicated profile.');
 }
 
 async function fetchJpyPerGbp() {
@@ -344,7 +318,6 @@ async function fetchJpyPerGbp() {
     ['open.er-api.com', 'https://open.er-api.com/v6/latest/GBP', data => data?.rates?.JPY],
     ['frankfurter.app', 'https://api.frankfurter.app/latest?from=GBP&to=JPY', data => data?.rates?.JPY]
   ];
-
   for (const [name, url, read] of sources) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
@@ -358,7 +331,6 @@ async function fetchJpyPerGbp() {
       result.diagnostics.push(`FX source failed (${name}): ${error.message}`);
     }
   }
-
   throw new Error('Unable to retrieve a live GBP/JPY rate.');
 }
 
@@ -371,41 +343,33 @@ function notifyWindows(title, body) {
   child.unref();
 }
 
-function choosePage(context) {
-  const pages = context.pages();
-  return pages.find(page => /rakuten\.co\.jp/i.test(page.url())) || pages[0];
-}
-
 async function bootstrap(context) {
-  let page = choosePage(context) || await context.newPage();
+  const page = context.pages().find(item => /rakuten\.co\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();
   await openProductWithRetry(page);
   console.log('\nOrdinary Chrome is open with the dedicated Rakuten profile.');
-  console.log('Manually select ONE WASH and size 33, add it to the basket, and open Shopping basket.');
-  console.log('Confirm that the basket shows FCP-1110W / ONE WASH / SIZE 33, then return here and press Enter.');
+  console.log('Manually select ONE WASH and size 33, then click 購入手続きへ.');
+  console.log('When the confirmation page shows FCP-1110W / ONE WASH / SIZE 33 / quantity 1, return here and press Enter.');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  await rl.question('Press Enter when the manual basket test is complete... ');
+  await rl.question('Press Enter when the manual confirmation test is complete... ');
   rl.close();
 
-  page = choosePage(context) || page;
-  await safeScreenshot(page, 'bootstrap-final');
-  const text = await bodyText(page);
-  if (/Shopping basket|買い物かご|ショッピングカート|Purchase procedure/i.test(text)) {
-    result.w33.basket_opened = true;
-    await verifyBasket(page);
-    await removeVerifiedItem(page);
-  } else {
-    result.diagnostics.push('Bootstrap ended without the Shopping basket page in the attached Chrome session.');
-  }
+  const confirmationPage = await chooseConfirmationPage(context);
+  if (!confirmationPage) throw new Error('Could not find the Rakuten confirmation page after the manual test.');
+  await safeScreenshot(confirmationPage, 'bootstrap-confirmation');
+  await verifyConfirmation(confirmationPage);
+  await removeVerifiedItem(confirmationPage);
 }
 
 async function runCheck(context) {
-  const page = choosePage(context) || await context.newPage();
+  const page = context.pages().find(item => /rakuten\.co\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();
   await openProductWithRetry(page);
   await safeScreenshot(page, 'product');
 
-  const text = await bodyText(page);
-  if (!/FCP-1110W|Fullcount Jeans 1110/i.test(text)) throw new Error('Rendered product identifiers were not found.');
+  const initialText = await bodyText(page);
+  if (!/FCP-1110W|Fullcount Jeans 1110|フルカウント.*1110/i.test(initialText)) {
+    throw new Error('Rendered product identifiers were not found.');
+  }
 
   const candidateTexts = await page.evaluate(() => [...document.querySelectorAll('body *')]
     .map(element => (element.innerText || '').replace(/\s+/g, ' ').trim())
@@ -418,10 +382,12 @@ async function runCheck(context) {
 
   await selectVariant(page);
   await safeScreenshot(page, 'selected-w33');
-  await addToCart(page);
-  await openBasket(page);
-  await safeScreenshot(page, 'basket');
-  await verifyBasket(page);
+  await clickPurchaseProcedure(page);
+
+  const confirmationPage = await chooseConfirmationPage(context);
+  if (!confirmationPage) throw new Error('Could not find the Rakuten confirmation page after clicking 購入手続きへ.');
+  await safeScreenshot(confirmationPage, 'confirmation');
+  await verifyConfirmation(confirmationPage);
 
   result.effective_price_jpy = result.listed_price_jpy - ASSUMED_COUPON_JPY;
   result.jpy_per_gbp = await fetchJpyPerGbp();
@@ -437,31 +403,29 @@ async function runCheck(context) {
     ].filter(Boolean).join(' and ');
     notifyWindows(
       'Fullcount 1110 W33 deal available',
-      `W33 is in the basket. Listed ¥${result.listed_price_jpy.toLocaleString('en-GB')}; assumed ¥1,000 discount = ¥${result.effective_price_jpy.toLocaleString('en-GB')} / £${result.effective_price_gbp.toFixed(2)}. Trigger: ${trigger}.`
+      `W33 is confirmed. Listed ¥${result.listed_price_jpy.toLocaleString('en-GB')}; assumed ¥1,000 discount = ¥${result.effective_price_jpy.toLocaleString('en-GB')} / £${result.effective_price_gbp.toFixed(2)}. Trigger: ${trigger}.`
     );
   }
 
-  await removeVerifiedItem(page);
+  await removeVerifiedItem(confirmationPage);
 }
 
 async function main() {
   await acquireLock();
-  let browser;
   let context;
   let errorPage;
 
   try {
-    browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+    const browser = await chromium.connectOverCDP(CDP_ENDPOINT);
     context = browser.contexts()[0];
     if (!context) throw new Error('Chrome exposed no browser context through CDP.');
-    errorPage = choosePage(context);
-
+    errorPage = context.pages()[0];
     if (BOOTSTRAP) await bootstrap(context);
     else await runCheck(context);
   } catch (error) {
     result.error = error.stack || error.message;
     if (context) {
-      errorPage = choosePage(context) || errorPage;
+      errorPage = await chooseConfirmationPage(context) || errorPage;
       if (errorPage) await safeScreenshot(errorPage, 'error');
     }
   } finally {
