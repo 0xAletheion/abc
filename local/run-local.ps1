@@ -1,3 +1,7 @@
+param(
+    [switch]$KeepItem
+)
+
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
@@ -14,12 +18,21 @@ try {
         throw "Dedicated Chrome startup failed with exit code $LASTEXITCODE."
     }
 
-    & node '.\local\local-monitor-cdp-v2.mjs' *>> $LogPath
+    if ($KeepItem) {
+        $env:RAKUTEN_KEEP_ITEM = '1'
+    } else {
+        Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
+    }
+
+    & node '.\local\local-monitor-runner.mjs' *>> $LogPath
     $ExitCode = $LASTEXITCODE
 }
 catch {
     $_ | Out-String | Out-File -FilePath $LogPath -Append -Encoding utf8
     $ExitCode = 1
+}
+finally {
+    Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
 }
 
 "[$(Get-Date -Format o)] Monitor exited with code $ExitCode" | Out-File -FilePath $LogPath -Append -Encoding utf8
