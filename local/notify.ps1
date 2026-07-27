@@ -13,7 +13,7 @@ $escapedTitle = [System.Security.SecurityElement]::Escape($Title)
 $escapedBody = [System.Security.SecurityElement]::Escape($Body)
 $escapedUrl = [System.Security.SecurityElement]::Escape($Url)
 
-$launch = if ($escapedUrl) { " launch=\"$escapedUrl\"" } else { '' }
+$launch = if ($escapedUrl) { ' launch="{0}"' -f $escapedUrl } else { '' }
 $xml = @"
 <toast$launch>
   <visual>
