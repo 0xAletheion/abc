@@ -33,6 +33,7 @@ jobs:
         run: |
           node --check local/local-monitor.mjs
           node --check local/local-monitor-cdp.mjs
+          node --check local/local-monitor-cdp-v2.mjs
           node --check monitor-cart.mjs
           node --check retry-monitor.mjs
 
