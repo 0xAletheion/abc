@@ -32,12 +32,14 @@ jobs:
         shell: pwsh
         run: |
           node --check local/local-monitor.mjs
+          node --check local/local-monitor-cdp.mjs
           node --check monitor-cart.mjs
           node --check retry-monitor.mjs
 
           $files = @(
             'local/setup-local.ps1',
             'local/run-local.ps1',
+            'local/start-chrome.ps1',
             'local/notify.ps1'
           )
           foreach ($file in $files) {
