@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node retry-monitor.mjs"
+    "check": "node retry-monitor.mjs",
+    "check:local": "node local/local-monitor.mjs",
+    "bootstrap:local": "node local/local-monitor.mjs --bootstrap"
   },
   "dependencies": {
     "playwright": "^1.58.1"
