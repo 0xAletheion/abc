@@ -27,18 +27,29 @@ if (-not $SkipBootstrap) {
         throw 'The dedicated ordinary Chrome session could not be started.'
     }
 
-    node '.\local\local-monitor-cdp-v2.mjs' --bootstrap
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The bootstrap browser check did not complete successfully. Review artifacts-local\result.json.'
+    $env:RAKUTEN_KEEP_ITEM = '1'
+    try {
+        node '.\local\local-monitor-runner.mjs' --bootstrap
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The bootstrap browser check did not complete successfully. Review artifacts-local\result.json.'
+        }
     }
-}
+    finally {
+        Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
+    }
 
-Write-Host ''
-Write-Host 'Running the first automated local availability test...'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-local.ps1')
-$FirstRunExit = $LASTEXITCODE
-if ($FirstRunExit -ne 0) {
-    Write-Warning 'The first automated run did not complete successfully. The task can still be installed, but inspect artifacts-local\result.json first.'
+    Write-Host ''
+    Write-Host 'The verified item has been left in the basket so the confirmation page remains visible.'
+    Write-Host 'Delete it manually before testing the automated run with -SkipBootstrap.'
+}
+else {
+    Write-Host ''
+    Write-Host 'Running the first automated local availability test and retaining the verified item...'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-local.ps1') -KeepItem
+    $FirstRunExit = $LASTEXITCODE
+    if ($FirstRunExit -ne 0) {
+        Write-Warning 'The first automated run did not complete successfully. The task can still be installed, but inspect artifacts-local\result.json first.'
+    }
 }
 
 if (-not $SkipSchedule) {
@@ -53,7 +64,7 @@ if (-not $SkipSchedule) {
 
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
     Write-Host "Installed hourly Windows task: $TaskName"
-    Write-Host 'It runs only while you are logged into Windows and uses an ordinary Chrome session with a dedicated profile.'
+    Write-Host 'Background runs clean up their own test item to prevent basket accumulation.'
 }
 
 Write-Host ''
