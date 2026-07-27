@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node monitor.mjs"
+    "check": "node monitor-cart.mjs"
   },
   "dependencies": {
     "playwright": "^1.58.1"
