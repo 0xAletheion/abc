@@ -64,7 +64,7 @@ async function findExactTargetTile(page, value, kind, watchResult) {
     try {
       const found = await frame.evaluate(({ value, kind, marker }) => {
         const normalise = input => String(input || '').replace(/\s+/g, ' ').trim();
-        const escape = input => String(input).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escape = input => String(input).replace(/[.*+?^$()|[\]\\{}]/g, '\\$&');
         const escaped = escape(value);
         const pattern = kind === 'size'
           ? new RegExp('^(?:(?:Size|サイズ)\\s*)?' + escaped + '(?:\\s|$)', 'i')
