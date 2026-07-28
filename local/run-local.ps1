@@ -24,7 +24,7 @@ try {
         Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
     }
 
-    & node '.\local\rakuten-multi-watch-runner.mjs' *>> $LogPath
+    & node '.\local\rakuten-multi-watch-runner-v3.mjs' *>> $LogPath
     $ExitCode = $LASTEXITCODE
 }
 catch {
