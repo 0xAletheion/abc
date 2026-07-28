@@ -32,12 +32,38 @@ source = replaceBlock(
   'variantRegex'
 );
 
-const selectVariantsReplacement = String.raw`async function targetVariantSoldOut(page, value, kind, watchResult) {
+const selectVariantsReplacement = String.raw`async function scrollToVariantArea(page, watchResult) {
+  const anchors = [
+    page.getByText(/商品詳細を選択|Select product details/i).first(),
+    page.getByText(/商品サイズ|Product size/i).first(),
+    page.getByText(/^SIZE\s*[:：]?/i).first()
+  ];
+
+  for (const anchor of anchors) {
+    try {
+      if (await anchor.count() && await anchor.isVisible()) {
+        await anchor.scrollIntoViewIfNeeded();
+        await page.waitForTimeout(1_400);
+        watchResult.diagnostics.push('Scrolled to the Rakuten product-detail selector.');
+        return;
+      }
+    } catch {}
+  }
+
+  await page.evaluate(() => {
+    window.scrollTo({ top: Math.floor(document.body.scrollHeight * 0.55), behavior: 'instant' });
+  });
+  await page.waitForTimeout(1_400);
+  watchResult.diagnostics.push('Used fallback scroll to locate the Rakuten product-detail selector.');
+}
+
+async function inspectTargetVariant(page, value, kind, watchResult) {
   const pattern = variantRegex(value, kind);
   const candidates = page
     .locator('button,label,[role="button"],li,div,span')
     .filter({ hasText: pattern });
 
+  const matches = [];
   for (let index = 0; index < await candidates.count(); index++) {
     const candidate = candidates.nth(index);
     try {
@@ -47,28 +73,59 @@ const selectVariantsReplacement = String.raw`async function targetVariantSoldOut
         .trim();
       if (!text || text.length > 220 || !pattern.test(text)) continue;
 
-      if (/売り切れ|売切れ|sold\s*out|out\s*of\s*stock/i.test(text)) {
-        watchResult.selection[kind + '_sold_out'] = true;
-        watchResult.sold_out_message_seen = true;
-        watchResult.status = 'unavailable';
-        watchResult.diagnostics.push(
-          kind + ' ' + value + ' is explicitly marked sold out on its target tile: ' + text
-        );
-        return true;
-      }
+      const box = await candidate.boundingBox();
+      if (!box) continue;
+      const tagName = await candidate.evaluate(element => element.tagName.toLowerCase()).catch(() => '');
+      const role = await candidate.getAttribute('role').catch(() => '');
+      const interactive = /^(button|label)$/.test(tagName) || role === 'button';
+      const soldOut = /売り切れ|売切れ|sold\s*out|out\s*of\s*stock/i.test(text);
+      const hasPrice = /\d{1,3}(?:,\d{3})\s*(?:円|yen)/i.test(text);
+      const score = (interactive ? 1_000_000 : 0) + (hasPrice ? 100_000 : 0) - (box.width * box.height);
+      matches.push({ locator: candidate, text, soldOut, score });
     } catch {}
   }
 
-  return false;
+  if (!matches.length) {
+    watchResult.diagnostics.push(kind + ' ' + value + ' target tile was not found after scrolling.');
+    return { found: false, soldOut: false, locator: null, text: '' };
+  }
+
+  const soldOutMatch = matches.find(match => match.soldOut);
+  const selected = soldOutMatch || matches.sort((a, b) => b.score - a.score)[0];
+  await selected.locator.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(400);
+  watchResult.diagnostics.push(
+    'Inspected exact ' + kind + ' ' + value + ' tile: ' + selected.text
+  );
+  return { found: true, soldOut: selected.soldOut, locator: selected.locator, text: selected.text };
 }
 
 async function selectVariants(page, watch, watchResult) {
+  if (watch.alertMode === 'stock') {
+    await scrollToVariantArea(page, watchResult);
+  }
+
   for (const kind of watch.selectionOrder) {
     const value = kind === 'size' ? watch.size : watch.colour;
     if (!value) continue;
 
-    if (await targetVariantSoldOut(page, value, kind, watchResult)) {
-      return { status: 'unavailable' };
+    if (watch.alertMode === 'stock') {
+      const target = await inspectTargetVariant(page, value, kind, watchResult);
+      if (target.found && target.soldOut) {
+        watchResult.selection[kind + '_sold_out'] = true;
+        watchResult.sold_out_message_seen = true;
+        watchResult.status = 'unavailable';
+        watchResult.diagnostics.push(kind + ' ' + value + ' is explicitly marked sold out.');
+        return { status: 'unavailable' };
+      }
+
+      if (target.found) {
+        const clicked = await humanClick(page, target.locator, kind + ' ' + value, watchResult);
+        watchResult.selection[kind + '_selected'] = clicked;
+        if (!clicked) throw new Error(kind + ' ' + value + ' target tile could not be clicked.');
+        await page.waitForTimeout(1_000);
+        continue;
+      }
     }
 
     const clicked = await clickVariant(page, value, kind, watchResult);
@@ -91,7 +148,7 @@ const selectionCallPattern = /    await selectVariants\(page, watch, watchResult
 const selectionCallReplacement = [
   '    const selectionOutcome = await selectVariants(page, watch, watchResult);',
   "    if (selectionOutcome.status === 'unavailable') {",
-  "      await safeScreenshot(page, `${watch.id}-sold-out-tile`, watchResult);",
+  '      await safeScreenshot(page, `${watch.id}-sold-out-tile`, watchResult);',
   '      return watchResult;',
   '    }',
   '    await safeScreenshot(page, `${watch.id}-selected`, watchResult);'
