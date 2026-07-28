@@ -21,34 +21,14 @@ npm install
 if (-not $SkipBootstrap) {
     Write-Host ''
     Write-Host 'Starting ordinary Chrome with the dedicated Rakuten profile.'
-    Write-Host 'Chrome is launched directly by PowerShell, without Playwright launch flags or --no-sandbox.'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'start-chrome.ps1')
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The dedicated ordinary Chrome session could not be started.'
-    }
-
-    $env:RAKUTEN_KEEP_ITEM = '1'
-    try {
-        node '.\local\local-monitor-runner.mjs' --bootstrap
-        if ($LASTEXITCODE -ne 0) {
-            throw 'The bootstrap browser check did not complete successfully. Review artifacts-local\result.json.'
-        }
-    }
-    finally {
-        Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
-    }
-
-    Write-Host ''
-    Write-Host 'The verified item has been left in the basket so the confirmation page remains visible.'
-    Write-Host 'Delete it manually before testing the automated run with -SkipBootstrap.'
-}
-else {
-    Write-Host ''
-    Write-Host 'Running the first automated local availability test and retaining the verified item...'
+    Write-Host 'Running a visible test of all three watches and retaining any verified item.'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run-local.ps1') -KeepItem
     $FirstRunExit = $LASTEXITCODE
     if ($FirstRunExit -ne 0) {
-        Write-Warning 'The first automated run did not complete successfully. The task can still be installed, but inspect artifacts-local\result.json first.'
+        Write-Warning 'The visible multi-watch test did not complete successfully. Inspect artifacts-local\result.json and scheduled-task.log.'
+    }
+    else {
+        Write-Host 'Visible test completed. Manually delete any item retained in the dedicated Rakuten basket.'
     }
 }
 
@@ -60,14 +40,16 @@ if (-not $SkipSchedule) {
     $StartAt = (Get-Date).AddMinutes(5)
     $Trigger = New-ScheduledTaskTrigger -Once -At $StartAt -RepetitionInterval (New-TimeSpan -Hours 12) -RepetitionDuration (New-TimeSpan -Days 3650)
     $Principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-    $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 12)
+    $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
     Write-Host "Installed twice-daily Windows task: $TaskName"
-    Write-Host 'Background runs clean up their own test item to prevent basket accumulation.'
+    Write-Host 'The task checks Fullcount 1110 W33, Studio D''Artisan 8173 white L, and Studio D''Artisan 8186 M.'
+    Write-Host 'Background runs remove their own verified basket items to prevent accumulation.'
 }
 
 Write-Host ''
 Write-Host 'Setup complete.'
 Write-Host 'Latest result: artifacts-local\result.json'
 Write-Host 'Run log:      artifacts-local\scheduled-task.log'
+Write-Host 'State file:   artifacts-local\watch-state.json'
