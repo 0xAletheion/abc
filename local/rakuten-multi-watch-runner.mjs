@@ -7,27 +7,30 @@ const sourcePath = path.join(directory, 'rakuten-multi-watch.mjs');
 const generatedPath = path.join(directory, '.rakuten-multi-watch-runtime.mjs');
 let source = await fs.readFile(sourcePath, 'utf8');
 
-const replacements = [
+const patches = [
   {
-    from: "    selectionOrder: ['size', 'colour'],\n    alertMode: 'stock'",
-    to: "    selectionOrder: [],\n    preselected: { size: true, colour: true },\n    alertMode: 'stock'"
+    pattern: /    selectionOrder: \['size', 'colour'\],\r?\n    alertMode: 'stock'/,
+    replacement: "    selectionOrder: [],\n    preselected: { size: true, colour: true },\n    alertMode: 'stock'",
+    description: '8173 L/white preselection'
   },
   {
-    from: "    selectionOrder: ['size'],\n    alertMode: 'stock'",
-    to: "    selectionOrder: [],\n    preselected: { size: true },\n    alertMode: 'stock'"
+    pattern: /    selectionOrder: \['size'\],\r?\n    alertMode: 'stock'/,
+    replacement: "    selectionOrder: [],\n    preselected: { size: true },\n    alertMode: 'stock'",
+    description: '8186 M preselection'
   },
   {
-    from: "    selection: {\n      size_selected: false,\n      colour_selected: watch.colour ? false : null\n    },",
-    to: "    selection: {\n      size_selected: Boolean(watch.preselected?.size),\n      colour_selected: watch.colour ? Boolean(watch.preselected?.colour) : null\n    },"
+    pattern: /    selection: \{\r?\n      size_selected: false,\r?\n      colour_selected: watch\.colour \? false : null\r?\n    \},/,
+    replacement: "    selection: {\n      size_selected: Boolean(watch.preselected?.size),\n      colour_selected: watch.colour ? Boolean(watch.preselected?.colour) : null\n    },",
+    description: 'preselected result flags'
   }
 ];
 
-for (const replacement of replacements) {
-  const count = source.split(replacement.from).length - 1;
-  if (count !== 1) {
-    throw new Error(`Expected exactly one runtime patch match, found ${count}: ${replacement.from}`);
+for (const patch of patches) {
+  const matches = source.match(new RegExp(patch.pattern.source, 'g')) ?? [];
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one runtime patch match for ${patch.description}, found ${matches.length}.`);
   }
-  source = source.replace(replacement.from, replacement.to);
+  source = source.replace(patch.pattern, patch.replacement);
 }
 
 await fs.writeFile(generatedPath, source);
