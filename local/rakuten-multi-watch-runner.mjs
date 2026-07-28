@@ -58,73 +58,135 @@ const selectVariantsReplacement = String.raw`async function scrollToVariantArea(
 }
 
 async function findExactTargetTile(page, value, kind, watchResult) {
-  const pattern = variantRegex(value, kind);
-  const candidates = page
-    .locator('button,label,[role="button"],li,div,span')
-    .filter({ hasText: pattern });
+  const marker = 'rakuten-monitor-' + kind + '-' + Date.now() + '-' + Math.random().toString(16).slice(2);
 
-  const matches = [];
-  for (let index = 0; index < await candidates.count(); index++) {
-    const candidate = candidates.nth(index);
+  for (const frame of page.frames()) {
     try {
-      if (!await candidate.isVisible()) continue;
-      const text = String(await candidate.innerText().catch(() => ''))
-        .replace(/\s+/g, ' ')
-        .trim();
-      if (!text || text.length > 220 || !pattern.test(text)) continue;
+      const found = await frame.evaluate(({ value, kind, marker }) => {
+        const normalise = input => String(input || '').replace(/\s+/g, ' ').trim();
+        const escape = input => String(input).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = escape(value);
+        const pattern = kind === 'size'
+          ? new RegExp('^(?:(?:Size|サイズ)\\s*)?' + escaped + '(?:\\s|$)', 'i')
+          : new RegExp('^' + escaped + '(?:\\s|$)', 'i');
 
-      const box = await candidate.boundingBox();
-      if (!box || box.width < 35 || box.height < 25) continue;
+        for (const old of document.querySelectorAll('[data-rakuten-monitor-target]')) {
+          old.removeAttribute('data-rakuten-monitor-target');
+        }
 
-      const hasPrice = /\d{1,3}(?:,\d{3})\s*(?:円|yen)/i.test(text);
-      const tagName = await candidate.evaluate(element => element.tagName.toLowerCase()).catch(() => '');
-      const role = await candidate.getAttribute('role').catch(() => '');
-      const interactive = /^(button|label)$/.test(tagName) || role === 'button';
-      const score = (hasPrice ? 1_000_000 : 0) + (interactive ? 100_000 : 0) - (box.width * box.height);
-      matches.push({ locator: candidate, text, score });
-    } catch {}
+        const all = [...document.querySelectorAll('*')];
+        let anchorTop = null;
+        for (const element of all) {
+          const text = normalise(element.innerText || element.textContent);
+          if (!/^(?:商品詳細を選択|Select product details)$/i.test(text)) continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            anchorTop = rect.top;
+            break;
+          }
+        }
+
+        const matches = [];
+        for (const element of all) {
+          const style = getComputedStyle(element);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 18 || rect.height < 12 || rect.width > 500 || rect.height > 260) continue;
+          if (anchorTop !== null && (rect.bottom < anchorTop - 40 || rect.top > anchorTop + 1_250)) continue;
+
+          const text = normalise(element.innerText || element.textContent);
+          if (!text || text.length > 220 || !pattern.test(text)) continue;
+
+          const upperText = text.toUpperCase();
+          const upperValue = String(value).toUpperCase();
+          const exactLabels = kind === 'size'
+            ? [upperValue, 'SIZE ' + upperValue, 'SIZE' + upperValue, 'サイズ' + upperValue]
+            : [upperValue];
+          const exact = exactLabels.includes(upperText);
+          const hasPrice = /\d{1,3}(?:,\d{3})\s*(?:円|yen)/i.test(text);
+          const clickable = ['BUTTON', 'LABEL', 'A'].includes(element.tagName) ||
+            element.getAttribute('role') === 'button' ||
+            typeof element.onclick === 'function' ||
+            getComputedStyle(element).cursor === 'pointer';
+          const inViewport = rect.bottom > 0 && rect.top < innerHeight;
+          const area = rect.width * rect.height;
+          const score =
+            (exact ? 10_000_000 : 0) +
+            (hasPrice ? 2_000_000 : 0) +
+            (clickable ? 500_000 : 0) +
+            (inViewport ? 100_000 : 0) -
+            area;
+
+          matches.push({ element, text, score, area });
+        }
+
+        if (!matches.length) return null;
+        matches.sort((a, b) => b.score - a.score || a.area - b.area);
+        const best = matches[0];
+        best.element.setAttribute('data-rakuten-monitor-target', marker);
+        best.element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+        return {
+          text: best.text,
+          tag: best.element.tagName.toLowerCase(),
+          score: best.score
+        };
+      }, { value, kind, marker });
+
+      if (!found) continue;
+      await page.waitForTimeout(500);
+      const locator = frame.locator('[data-rakuten-monitor-target="' + marker + '"]').first();
+      if (!await locator.count()) continue;
+      watchResult.diagnostics.push(
+        'Rendered-DOM scan located exact ' + kind + ' ' + value + ' target: ' + found.text +
+        ' [' + found.tag + ']'
+      );
+      return { locator, text: found.text, frameUrl: frame.url() };
+    } catch (error) {
+      watchResult.diagnostics.push(
+        'Target scan skipped one frame for ' + kind + ' ' + value + ': ' + error.message
+      );
+    }
   }
 
-  if (!matches.length) {
-    watchResult.diagnostics.push(kind + ' ' + value + ' target tile was not found after scrolling.');
-    return null;
-  }
-
-  matches.sort((a, b) => b.score - a.score);
-  const selected = matches[0];
-  await selected.locator.scrollIntoViewIfNeeded().catch(() => {});
-  await page.waitForTimeout(450);
-  watchResult.diagnostics.push('Located exact ' + kind + ' ' + value + ' tile: ' + selected.text);
-  return selected;
+  watchResult.diagnostics.push(kind + ' ' + value + ' target tile was not found by the rendered-DOM scan.');
+  return null;
 }
 
-async function clickExactTargetTile(page, target, description, watchResult) {
+async function clickExactTargetTile(target, description, watchResult) {
   try {
     await target.locator.scrollIntoViewIfNeeded();
-    const box = await target.locator.boundingBox();
-    if (!box) return false;
-
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 10 });
-    await page.waitForTimeout(180);
-    await page.mouse.down();
-    await page.waitForTimeout(120);
-    await page.mouse.up();
-    watchResult.diagnostics.push('Clicked exact ' + description + ' tile by coordinates.');
-    await page.waitForTimeout(1_200);
+    await target.locator.click({ force: true, timeout: 6_000 });
+    watchResult.diagnostics.push('Force-clicked exact ' + description + ' rendered target.');
+    await new Promise(resolve => setTimeout(resolve, 1_300));
     return true;
   } catch (error) {
-    watchResult.diagnostics.push('Exact ' + description + ' tile click failed: ' + error.message);
+    watchResult.diagnostics.push('Exact ' + description + ' click failed: ' + error.message);
     return false;
   }
 }
 
+function selectedVariantHeadingPattern(value, kind) {
+  const escaped = escapeRegExp(value);
+  if (kind === 'size') {
+    return new RegExp(
+      '(?:商品サイズ|Product\\s*size)\\s*[:：]\\s*(?:(?:Size|サイズ)\\s*)?' + escaped + '\\b',
+      'i'
+    );
+  }
+  return new RegExp(
+    '(?:COLOR|カラー|色)\\s*[:：]\\s*' + escaped + '\\b',
+    'i'
+  );
+}
+
 async function waitForVariantSelection(page, value, kind) {
-  const deadline = Date.now() + 6_000;
-  const pattern = kind === 'size' ? sizePattern(value) : colourPattern(value);
+  const deadline = Date.now() + 7_000;
+  const pattern = selectedVariantHeadingPattern(value, kind);
 
   while (Date.now() < deadline) {
     const text = (await bodyText(page)).replace(/\s+/g, ' ');
-    if (pattern && pattern.test(text)) return true;
+    if (pattern.test(text)) return true;
     await page.waitForTimeout(300);
   }
 
@@ -144,7 +206,7 @@ async function selectVariants(page, watch, watchResult) {
       const target = await findExactTargetTile(page, value, kind, watchResult);
       if (!target) throw new Error(kind + ' ' + value + ' target tile could not be located.');
 
-      const clicked = await clickExactTargetTile(page, target, kind + ' ' + value, watchResult);
+      const clicked = await clickExactTargetTile(target, kind + ' ' + value, watchResult);
       watchResult.selection[kind + '_selected'] = clicked;
       if (!clicked) throw new Error(kind + ' ' + value + ' target tile could not be clicked.');
 
