@@ -43,11 +43,11 @@ const selectVariantsReplacement = String.raw`async function targetVariantSoldOut
     try {
       if (!await candidate.isVisible()) continue;
       const text = String(await candidate.innerText().catch(() => ''))
-        .replace(/\\s+/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
       if (!text || text.length > 220 || !pattern.test(text)) continue;
 
-      if (/売り切れ|売切れ|sold\\s*out|out\\s*of\\s*stock/i.test(text)) {
+      if (/売り切れ|売切れ|sold\s*out|out\s*of\s*stock/i.test(text)) {
         watchResult.selection[kind + '_sold_out'] = true;
         watchResult.sold_out_message_seen = true;
         watchResult.status = 'unavailable';
