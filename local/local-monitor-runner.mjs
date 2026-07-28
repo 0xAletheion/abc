@@ -54,7 +54,7 @@ async function tryCandidate(page, candidate, description, kind, value) {
 
     for (let attempt = 0; attempt < 8; attempt++) {
       if (await variantSelected(page, kind, value)) {
-        result.diagnostics.push('Selected ' + description + ' in frame ' + candidate.page().url() + '.');
+        result.diagnostics.push('Selected ' + description + ' across Rakuten frames.');
         return true;
       }
       await page.waitForTimeout(250);
