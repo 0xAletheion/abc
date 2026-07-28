@@ -10,7 +10,7 @@ $LogDirectory = Join-Path $Root 'artifacts-local'
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $LogPath = Join-Path $LogDirectory 'scheduled-task.log'
 
-"`n[$(Get-Date -Format o)] Starting local Rakuten monitor" | Out-File -FilePath $LogPath -Append -Encoding utf8
+"`n[$(Get-Date -Format o)] Starting local Rakuten multi-watch" | Out-File -FilePath $LogPath -Append -Encoding utf8
 
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'start-chrome.ps1') -Minimized *>> $LogPath
@@ -24,7 +24,7 @@ try {
         Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
     }
 
-    & node '.\local\local-monitor-runner.mjs' *>> $LogPath
+    & node '.\local\rakuten-multi-watch.mjs' *>> $LogPath
     $ExitCode = $LASTEXITCODE
 }
 catch {
@@ -35,5 +35,5 @@ finally {
     Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
 }
 
-"[$(Get-Date -Format o)] Monitor exited with code $ExitCode" | Out-File -FilePath $LogPath -Append -Encoding utf8
+"[$(Get-Date -Format o)] Multi-watch exited with code $ExitCode" | Out-File -FilePath $LogPath -Append -Encoding utf8
 exit $ExitCode
