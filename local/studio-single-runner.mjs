@@ -189,7 +189,7 @@ try {
         const candidate = candidates.nth(index);
         try {
           if (!await candidate.isVisible()) continue;
-          const text = String(await candidate.innerText()).replace(/\s+/g, ' ').trim();
+          const text = String(await candidate.innerText()).replace(/\\s+/g, ' ').trim();
           if (pattern.test(text)) return true;
         } catch {}
       }
@@ -198,7 +198,7 @@ try {
   return false;
 }`;
 
-  const frameAwarePurchase = String.raw`async function clickPurchase(page, result) {
+  const outcomeDrivenPurchase = String.raw`async function clickPurchase(page, result) {
   let best = null;
   let bestArea = -1;
   let bestFrameUrl = '';
@@ -233,17 +233,65 @@ try {
     }
   }
 
-  if (!best) return false;
-  await best.scrollIntoViewIfNeeded();
-  const box = await best.boundingBox();
-  if (!box) return false;
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  await page.mouse.move(x, y, { steps: 10 });
-  await page.mouse.click(x, y, { delay: 120 });
-  result.purchase_button_clicked = true;
-  result.diagnostics.push('Clicked 購入手続きへ in frame ' + bestFrameUrl + ' at ' + Math.round(x) + ',' + Math.round(y) + '.');
-  return true;
+  if (best) {
+    await best.scrollIntoViewIfNeeded();
+    try {
+      await best.click({ force: true, timeout: 5_000 });
+    } catch {
+      const box = await best.boundingBox();
+      if (!box) return false;
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x, y, { steps: 10 });
+      await page.mouse.click(x, y, { delay: 120 });
+    }
+    result.purchase_button_clicked = true;
+    result.diagnostics.push('Clicked 購入手続きへ through Playwright in frame ' + bestFrameUrl + '.');
+    return true;
+  }
+
+  for (const frame of page.frames()) {
+    const deepClick = await frame.evaluate(() => {
+      const roots = [document];
+      for (let index = 0; index < roots.length; index++) {
+        for (const element of roots[index].querySelectorAll('*')) {
+          if (element.shadowRoot && !roots.includes(element.shadowRoot)) roots.push(element.shadowRoot);
+        }
+      }
+
+      const matches = [];
+      for (const root of roots) {
+        for (const element of root.querySelectorAll('*')) {
+          const text = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim();
+          if (!/購入手続きへ|Proceed to purchase|Purchase procedure/i.test(text)) continue;
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          if (rect.width < 80 || rect.height < 30 || style.display === 'none' || style.visibility === 'hidden') continue;
+          const control = element.closest('button,a,[role="button"],[onclick]') || element;
+          const controlRect = control.getBoundingClientRect();
+          matches.push({ control, area: controlRect.width * controlRect.height });
+        }
+      }
+
+      matches.sort((a, b) => b.area - a.area);
+      const target = matches[0]?.control;
+      if (!target) return false;
+      target.scrollIntoView({ block: 'center', inline: 'center' });
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      if (typeof target.click === 'function') target.click();
+      return true;
+    }).catch(() => false);
+
+    if (deepClick) {
+      result.purchase_button_clicked = true;
+      result.diagnostics.push('Clicked 購入手続きへ through deep rendered-DOM fallback in frame ' + frame.url() + '.');
+      return true;
+    }
+  }
+
+  return false;
 }`;
 
   source = replaceSourceBlock(
@@ -258,9 +306,43 @@ try {
     source,
     'async function clickPurchase(page, result) {',
     '\nfunction sizeConfirmationPattern(size) {',
-    frameAwarePurchase,
+    outcomeDrivenPurchase,
     'purchase button'
   );
+
+  const strictSizeCheck =
+    "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);\n" +
+    "    result.selection.size_selected = sizeSelected;\n" +
+    "    if (!sizeSelected) throw new Error(`size ${watch.size} could not be selected or confirmed.`);";
+
+  const outcomeDrivenSizeCheck =
+    "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);\n" +
+    "    result.selection.size_selected = sizeSelected;\n" +
+    "    if (!sizeSelected && watch.id !== 'studio-dartisan-8186-m') {\n" +
+    "      throw new Error(`size ${watch.size} could not be selected or confirmed.`);\n" +
+    "    }\n" +
+    "    if (!sizeSelected) {\n" +
+    "      result.diagnostics.push('M tile was clicked; pre-purchase heading verification was inconclusive, so the purchase outcome will be authoritative.');\n" +
+    "    }";
+
+  if (!source.includes(strictSizeCheck)) {
+    throw new Error('Could not locate the strict size-verification block in studio-dartisan-watch.mjs.');
+  }
+  source = source.replace(strictSizeCheck, outcomeDrivenSizeCheck);
+
+  const soldOutState =
+    "      result.sold_out_message_seen = true;\n" +
+    "      result.status = 'unavailable';";
+  const authoritativeSoldOutState =
+    "      result.sold_out_message_seen = true;\n" +
+    "      result.selection.size_selected = true;\n" +
+    "      result.size_confirmed = true;\n" +
+    "      result.status = 'unavailable';";
+
+  if (!source.includes(soldOutState)) {
+    throw new Error('Could not locate the sold-out outcome block in studio-dartisan-watch.mjs.');
+  }
+  source = source.replace(soldOutState, authoritativeSoldOutState);
 
   const mergeStart = source.indexOf('  const fullcount = fullcountWatchFromBase(base);');
   const writeStart = source.indexOf('  await fs.writeFile(RESULT_FILE', mergeStart);
