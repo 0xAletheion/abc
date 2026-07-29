@@ -10,17 +10,82 @@ const STUDIO_8186_RESULT = path.join(ARTIFACT_DIR, 'studio-8186-result.json');
 const COMBINED_RESULT = path.join(ARTIFACT_DIR, 'three-watch-result.json');
 const COMBINED_HISTORY = path.join(ARTIFACT_DIR, 'three-watch-history.ndjson');
 
-async function readJson(filePath, label) {
+function errorMessage(label, filePath, error) {
+  return `${label} result could not be read at ${filePath}: ${error.message}`;
+}
+
+async function readJsonOrFallback(filePath, label, fallbackFactory) {
   try {
     return JSON.parse(await fs.readFile(filePath, 'utf8'));
   } catch (error) {
-    throw new Error(`Could not read ${label} at ${filePath}: ${error.message}`);
+    return fallbackFactory(errorMessage(label, filePath, error));
   }
 }
 
 function firstMeaningfulError(value) {
   if (!value) return null;
   return String(value).split(/\r?\n/)[0].trim() || null;
+}
+
+function fullcountFallback(message) {
+  return {
+    checked_at: new Date().toISOString(),
+    environment: 'ordinary-chrome-cdp-fullcount-missing-result',
+    product_url: 'https://item.rakuten.co.jp/realmoon/1110w/',
+    listed_price_jpy: null,
+    assumed_coupon_jpy: 1_000,
+    effective_price_jpy: null,
+    jpy_per_gbp: null,
+    effective_price_gbp: null,
+    price_trigger_met: false,
+    gbp_trigger_met: false,
+    alert_triggered: false,
+    w33: {
+      colour_selected: false,
+      size_selected: false,
+      purchase_button_clicked: false,
+      sold_out_message_seen: false,
+      confirmation_page_opened: false,
+      product_confirmed: false,
+      colour_confirmed: false,
+      size_confirmed: false,
+      quantity: null,
+      quantity_confirmed: false,
+      genuinely_available: false,
+      status: 'error'
+    },
+    diagnostics: [message],
+    error: message
+  };
+}
+
+function studioFallback(message, definition) {
+  return {
+    checked_at: new Date().toISOString(),
+    environment: `ordinary-chrome-cdp-${definition.id}-missing-result`,
+    watches: [{
+      id: definition.id,
+      name: definition.name,
+      url: definition.url,
+      target_size: definition.size,
+      target_colour: definition.colour,
+      listed_price_jpy: null,
+      selection: {
+        size_selected: false,
+        colour_selected: false
+      },
+      purchase_button_clicked: false,
+      sold_out_message_seen: false,
+      confirmation_page_opened: false,
+      quantity: null,
+      genuinely_available: false,
+      status: 'error',
+      diagnostics: [message],
+      error: message
+    }],
+    alert_triggered: false,
+    error: message
+  };
 }
 
 function fullcountWatch(base) {
@@ -63,8 +128,16 @@ function fullcountWatch(base) {
 function isolatedStudioWatch(base, expectedId, label) {
   const watches = Array.isArray(base.watches) ? base.watches : [];
   const watch = watches.find(item => item?.id === expectedId) ?? watches[0];
-  if (!watch) throw new Error(`${label} result did not contain a watch row.`);
-  return watch;
+  if (watch) return watch;
+
+  const message = `${label} result did not contain a watch row.`;
+  return studioFallback(message, {
+    id: expectedId,
+    name: label,
+    url: null,
+    size: null,
+    colour: null
+  }).watches[0];
 }
 
 function latestTimestamp(values) {
@@ -74,16 +147,44 @@ function latestTimestamp(values) {
   return valid.length ? new Date(Math.max(...valid)).toISOString() : new Date().toISOString();
 }
 
+const studio8173Definition = {
+  id: 'studio-dartisan-8173-l-white',
+  name: "Studio D'Artisan 8173 white size L",
+  url: 'https://item.rakuten.co.jp/barbizon/sd8173/?variantId=r-sku00000003',
+  size: 'L',
+  colour: 'white'
+};
+
+const studio8186Definition = {
+  id: 'studio-dartisan-8186-m',
+  name: "Studio D'Artisan 8186 size M",
+  url: 'https://item.rakuten.co.jp/auc-americanbass/10018065/',
+  size: 'M',
+  colour: null
+};
+
 await fs.mkdir(ARTIFACT_DIR, { recursive: true });
 
-const fullcountBase = await readJson(FULLCOUNT_RESULT, 'Fullcount result');
-const studio8173Base = await readJson(STUDIO_8173_RESULT, 'Studio 8173 result');
-const studio8186Base = await readJson(STUDIO_8186_RESULT, 'Studio 8186 result');
+const fullcountBase = await readJsonOrFallback(
+  FULLCOUNT_RESULT,
+  'Fullcount',
+  fullcountFallback
+);
+const studio8173Base = await readJsonOrFallback(
+  STUDIO_8173_RESULT,
+  'Studio 8173',
+  message => studioFallback(message, studio8173Definition)
+);
+const studio8186Base = await readJsonOrFallback(
+  STUDIO_8186_RESULT,
+  'Studio 8186',
+  message => studioFallback(message, studio8186Definition)
+);
 
 const watches = [
   fullcountWatch(fullcountBase),
-  isolatedStudioWatch(studio8173Base, 'studio-dartisan-8173-l-white', 'Studio 8173'),
-  isolatedStudioWatch(studio8186Base, 'studio-dartisan-8186-m', 'Studio 8186')
+  isolatedStudioWatch(studio8173Base, studio8173Definition.id, studio8173Definition.name),
+  isolatedStudioWatch(studio8186Base, studio8186Definition.id, studio8186Definition.name)
 ];
 
 const errors = watches
@@ -94,7 +195,7 @@ const combined = {
   ...fullcountBase,
   checked_at: latestTimestamp(watches.map(watch => watch.checked_at)),
   combined_at: new Date().toISOString(),
-  environment: 'ordinary-chrome-cdp-three-watch-validated-v1',
+  environment: 'ordinary-chrome-cdp-three-watch-validated-v2',
   watches,
   alert_triggered: watches.some(watch => Boolean(watch.alert_triggered)),
   error: errors.length ? errors.join(' | ') : null
