@@ -1,5 +1,6 @@
 param(
-    [switch]$Minimized
+    [switch]$Minimized,
+    [string]$ProductUrl = 'https://item.rakuten.co.jp/realmoon/1110w/'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -7,7 +8,6 @@ $Root = Split-Path -Parent $PSScriptRoot
 $ProfileDir = Join-Path $Root '.rakuten-cdp-profile'
 $Port = 9222
 $Endpoint = "http://127.0.0.1:$Port/json/version"
-$ProductUrl = 'https://item.rakuten.co.jp/realmoon/1110w/'
 
 function Test-DebugEndpoint {
     try {
