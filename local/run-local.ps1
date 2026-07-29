@@ -78,7 +78,7 @@ function Invoke-CapturedProcess {
     Add-StepOutput -Path $StdoutPath -Heading "$Label stdout"
     Add-StepOutput -Path $StderrPath -Heading "$Label stderr"
 
-    "[$(Get-Date -Format o)] Step exited with code $StepExit: $Label" |
+    "[$(Get-Date -Format o)] Step exited with code ${StepExit}: $Label" |
         Out-File -FilePath $RunLogPath -Append -Encoding utf8
 
     return $StepExit
