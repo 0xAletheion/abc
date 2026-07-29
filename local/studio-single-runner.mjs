@@ -119,14 +119,12 @@ try {
 
   const watchStart = source.indexOf('const WATCHES = [');
   const functionStart = source.indexOf('function escapeRegExp', watchStart);
-
   if (watchStart < 0 || functionStart < 0 || functionStart <= watchStart) {
     throw new Error(
       'Could not locate the WATCHES/function boundary in studio-dartisan-watch.mjs. ' +
       'watchStart=' + watchStart + ', functionStart=' + functionStart + '.'
     );
   }
-
   source = source.slice(0, watchStart) + watchBlocks[requested] + '\n\n' + source.slice(functionStart);
 
   const replacements = [
@@ -310,39 +308,38 @@ try {
     'purchase button'
   );
 
-  const strictSizeCheck =
-    "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);\n" +
-    "    result.selection.size_selected = sizeSelected;\n" +
-    "    if (!sizeSelected) throw new Error(`size ${watch.size} could not be selected or confirmed.`);";
-
-  const outcomeDrivenSizeCheck =
-    "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);\n" +
-    "    result.selection.size_selected = sizeSelected;\n" +
-    "    if (!sizeSelected && watch.id !== 'studio-dartisan-8186-m') {\n" +
-    "      throw new Error(`size ${watch.size} could not be selected or confirmed.`);\n" +
-    "    }\n" +
-    "    if (!sizeSelected) {\n" +
-    "      result.diagnostics.push('M tile was clicked; pre-purchase heading verification was inconclusive, so the purchase outcome will be authoritative.');\n" +
-    "    }";
-
-  if (!source.includes(strictSizeCheck)) {
-    throw new Error('Could not locate the strict size-verification block in studio-dartisan-watch.mjs.');
+  const sizeBlockStartMarker = "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);";
+  const colourBlockMarker = '    if (watch.colour) {';
+  const sizeBlockStart = source.indexOf(sizeBlockStartMarker);
+  const colourBlockStart = source.indexOf(colourBlockMarker, sizeBlockStart);
+  if (sizeBlockStart < 0 || colourBlockStart < 0 || colourBlockStart <= sizeBlockStart) {
+    throw new Error(
+      'Could not locate the size-selection/colour boundary in studio-dartisan-watch.mjs. ' +
+      'sizeBlockStart=' + sizeBlockStart + ', colourBlockStart=' + colourBlockStart + '.'
+    );
   }
-  source = source.replace(strictSizeCheck, outcomeDrivenSizeCheck);
 
-  const soldOutState =
-    "      result.sold_out_message_seen = true;\n" +
-    "      result.status = 'unavailable';";
-  const authoritativeSoldOutState =
-    "      result.sold_out_message_seen = true;\n" +
-    "      result.selection.size_selected = true;\n" +
-    "      result.size_confirmed = true;\n" +
-    "      result.status = 'unavailable';";
+  const outcomeDrivenSizeCheck = [
+    "    const sizeSelected = await clickTargetTile(page, watch, 'size', result);",
+    '    result.selection.size_selected = sizeSelected;',
+    "    if (!sizeSelected && watch.id !== 'studio-dartisan-8186-m') {",
+    '      throw new Error(`size ${watch.size} could not be selected or confirmed.`);',
+    '    }',
+    '    if (!sizeSelected) {',
+    "      result.diagnostics.push('M tile was clicked; pre-purchase heading verification was inconclusive, so the purchase outcome will be authoritative.');",
+    '    }',
+    ''
+  ].join('\n');
+  source = source.slice(0, sizeBlockStart) + outcomeDrivenSizeCheck + source.slice(colourBlockStart);
 
-  if (!source.includes(soldOutState)) {
-    throw new Error('Could not locate the sold-out outcome block in studio-dartisan-watch.mjs.');
+  const soldOutMarker = '      result.sold_out_message_seen = true;';
+  if (!source.includes(soldOutMarker)) {
+    throw new Error('Could not locate the sold-out result marker in studio-dartisan-watch.mjs.');
   }
-  source = source.replace(soldOutState, authoritativeSoldOutState);
+  source = source.replace(
+    soldOutMarker,
+    soldOutMarker + '\n      result.selection.size_selected = true;\n      result.size_confirmed = true;'
+  );
 
   const mergeStart = source.indexOf('  const fullcount = fullcountWatchFromBase(base);');
   const writeStart = source.indexOf('  await fs.writeFile(RESULT_FILE', mergeStart);
