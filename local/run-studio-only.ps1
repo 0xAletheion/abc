@@ -14,12 +14,19 @@ $LogDirectory = Join-Path $Root 'artifacts-local'
 New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null
 $LogPath = Join-Path $LogDirectory ("studio-{0}-only.log" -f $Watch)
 
+$ProductUrl = if ($Watch -eq '8173') {
+    'https://item.rakuten.co.jp/barbizon/sd8173/?variantId=r-sku00000003'
+} else {
+    'https://item.rakuten.co.jp/auc-americanbass/10018065/'
+}
+
 "`n[$(Get-Date -Format o)] Starting isolated Studio D'Artisan $Watch run" |
     Out-File -FilePath $LogPath -Append -Encoding utf8
 
 try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass `
-        -File (Join-Path $PSScriptRoot 'start-chrome.ps1') *>> $LogPath
+        -File (Join-Path $PSScriptRoot 'start-chrome.ps1') `
+        -ProductUrl $ProductUrl *>> $LogPath
 
     if ($LASTEXITCODE -ne 0) {
         throw "Dedicated Chrome startup failed with exit code $LASTEXITCODE."
