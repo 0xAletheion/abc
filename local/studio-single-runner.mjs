@@ -31,28 +31,52 @@ const watchDefinitions = {
 const selectedWatch = watchDefinitions[requested];
 const resultPath = path.join(artifactDirectory, 'studio-' + requested + '-result.json');
 
-await fs.mkdir(artifactDirectory, { recursive: true });
-await fs.writeFile(resultPath, JSON.stringify({
-  checked_at: new Date().toISOString(),
-  environment: 'ordinary-chrome-cdp-studio-' + requested + '-isolated-starting',
-  watches: [{
-    id: selectedWatch.id,
-    name: selectedWatch.name,
-    url: selectedWatch.url,
-    target_size: selectedWatch.size,
-    target_colour: selectedWatch.colour,
-    status: 'starting',
-    diagnostics: ['Isolated runner started; waiting to connect to Chrome and open a fresh product tab.'],
+function startingResult() {
+  return {
+    checked_at: new Date().toISOString(),
+    environment: 'ordinary-chrome-cdp-studio-' + requested + '-isolated-starting',
+    watches: [{
+      id: selectedWatch.id,
+      name: selectedWatch.name,
+      url: selectedWatch.url,
+      target_size: selectedWatch.size,
+      target_colour: selectedWatch.colour,
+      status: 'starting',
+      diagnostics: ['Isolated runner started; preparing the generated runtime.'],
+      error: null
+    }],
     error: null
-  }],
-  error: null
-}, null, 2));
+  };
+}
 
-const sourcePath = path.join(directory, 'studio-dartisan-watch.mjs');
-let source = await fs.readFile(sourcePath, 'utf8');
+async function writeGenerationError(error) {
+  const message = error?.stack || error?.message || String(error);
+  await fs.writeFile(resultPath, JSON.stringify({
+    checked_at: new Date().toISOString(),
+    environment: 'ordinary-chrome-cdp-studio-' + requested + '-generation-error',
+    watches: [{
+      id: selectedWatch.id,
+      name: selectedWatch.name,
+      url: selectedWatch.url,
+      target_size: selectedWatch.size,
+      target_colour: selectedWatch.colour,
+      status: 'error',
+      diagnostics: ['The isolated runner failed while generating its runtime, before Chrome automation began.'],
+      error: message
+    }],
+    error: message
+  }, null, 2));
+}
 
-const watchBlocks = {
-  '8173': String.raw`const WATCHES = [
+await fs.mkdir(artifactDirectory, { recursive: true });
+await fs.writeFile(resultPath, JSON.stringify(startingResult(), null, 2));
+
+try {
+  const sourcePath = path.join(directory, 'studio-dartisan-watch.mjs');
+  let source = await fs.readFile(sourcePath, 'utf8');
+
+  const watchBlocks = {
+    '8173': String.raw`const WATCHES = [
   {
     id: 'studio-dartisan-8173-l-white',
     name: "Studio D'Artisan 8173 white size L",
@@ -67,7 +91,7 @@ const watchBlocks = {
     colourCount: 1
   }
 ];`,
-  '8186': String.raw`const WATCHES = [
+    '8186': String.raw`const WATCHES = [
   {
     id: 'studio-dartisan-8186-m',
     name: "Studio D'Artisan 8186 size M",
@@ -82,53 +106,69 @@ const watchBlocks = {
     colourCount: null
   }
 ];`
-};
+  };
 
-const watchStart = source.indexOf('const WATCHES = [');
-const watchEndMarker = '\n\nfunction escapeRegExp';
-const watchEnd = source.indexOf(watchEndMarker, watchStart);
+  const watchStart = source.indexOf('const WATCHES = [');
+  const functionStart = source.indexOf('function escapeRegExp', watchStart);
 
-if (watchStart < 0 || watchEnd < 0 || watchEnd <= watchStart) {
-  throw new Error('Could not locate the WATCHES block in studio-dartisan-watch.mjs.');
-}
+  if (watchStart < 0 || functionStart < 0 || functionStart <= watchStart) {
+    throw new Error(
+      'Could not locate the WATCHES/function boundary in studio-dartisan-watch.mjs. ' +
+      'watchStart=' + watchStart + ', functionStart=' + functionStart + '.'
+    );
+  }
 
-source = source.slice(0, watchStart) + watchBlocks[requested] + source.slice(watchEnd);
-source = source.replace(
-  "const RESULT_FILE = path.join(ARTIFACT_DIR, 'result.json');",
-  "const RESULT_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-result.json');"
-);
-source = source.replace(
-  "const HISTORY_FILE = path.join(ARTIFACT_DIR, 'history.ndjson');",
-  "const HISTORY_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-history.ndjson');"
-);
-source = source.replace(
-  "const STATE_FILE = path.join(ARTIFACT_DIR, 'studio-watch-state.json');",
-  "const STATE_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-state.json');"
-);
-source = source.replace(
-  "base.environment = 'ordinary-chrome-cdp-three-watch-v5';",
-  "base.environment = 'ordinary-chrome-cdp-studio-" + requested + "-isolated';"
-);
+  source = source.slice(0, watchStart) + watchBlocks[requested] + '\n\n' + source.slice(functionStart);
 
-const oldPageSelection = "const page = context.pages().find(item => /rakuten\\.co\\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();";
-const newPageSelection = "const page = await context.newPage();\n    await page.bringToFront();";
-if (!source.includes(oldPageSelection)) {
-  throw new Error('Could not locate the page-selection line in studio-dartisan-watch.mjs.');
-}
-source = source.replace(oldPageSelection, newPageSelection);
+  const replacements = [
+    [
+      "const RESULT_FILE = path.join(ARTIFACT_DIR, 'result.json');",
+      "const RESULT_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-result.json');",
+      'RESULT_FILE'
+    ],
+    [
+      "const HISTORY_FILE = path.join(ARTIFACT_DIR, 'history.ndjson');",
+      "const HISTORY_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-history.ndjson');",
+      'HISTORY_FILE'
+    ],
+    [
+      "const STATE_FILE = path.join(ARTIFACT_DIR, 'studio-watch-state.json');",
+      "const STATE_FILE = path.join(ARTIFACT_DIR, 'studio-" + requested + "-state.json');",
+      'STATE_FILE'
+    ],
+    [
+      "base.environment = 'ordinary-chrome-cdp-three-watch-v5';",
+      "base.environment = 'ordinary-chrome-cdp-studio-" + requested + "-isolated';",
+      'environment'
+    ],
+    [
+      "const page = context.pages().find(item => /rakuten\\.co\\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();",
+      "const page = await context.newPage();\n    await page.bringToFront();",
+      'fresh-page selection'
+    ],
+    [
+      "await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });",
+      "result.diagnostics.push('Opening fresh product tab: ' + watch.url);\n  await page.bringToFront();\n  await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });",
+      'product navigation'
+    ]
+  ];
 
-const oldGoto = "await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });";
-const newGoto = "result.diagnostics.push('Opening fresh product tab: ' + watch.url);\n  await page.bringToFront();\n  await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });";
-if (!source.includes(oldGoto)) {
-  throw new Error('Could not locate the product-navigation line in studio-dartisan-watch.mjs.');
-}
-source = source.replace(oldGoto, newGoto);
+  for (const [oldText, newText, label] of replacements) {
+    if (!source.includes(oldText)) {
+      throw new Error('Could not locate the ' + label + ' source text in studio-dartisan-watch.mjs.');
+    }
+    source = source.replace(oldText, newText);
+  }
 
-const generatedPath = path.join(directory, '.studio-' + requested + '-runtime.mjs');
-await fs.writeFile(generatedPath, source);
+  const generatedPath = path.join(directory, '.studio-' + requested + '-runtime.mjs');
+  await fs.writeFile(generatedPath, source);
 
-if (process.env.RAKUTEN_PATCH_ONLY === '1') {
-  console.log('Generated isolated Studio runtime: ' + generatedPath);
-} else {
-  await import(pathToFileURL(generatedPath).href + '?run=' + Date.now());
+  if (process.env.RAKUTEN_PATCH_ONLY === '1') {
+    console.log('Generated isolated Studio runtime: ' + generatedPath);
+  } else {
+    await import(pathToFileURL(generatedPath).href + '?run=' + Date.now());
+  }
+} catch (error) {
+  await writeGenerationError(error);
+  throw error;
 }
