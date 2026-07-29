@@ -143,12 +143,12 @@ try {
     ],
     [
       "const page = context.pages().find(item => /rakuten\\.co\\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();",
-      "const page = await context.newPage();\n    await page.bringToFront();",
-      'fresh-page selection'
+      "let page = context.pages().find(item => item.url().startsWith(WATCHES[0].url.split('?')[0]));\n    if (!page) page = context.pages()[0] || await context.newPage();\n    for (const otherPage of context.pages()) {\n      if (otherPage !== page) await otherPage.close().catch(() => {});\n    }\n    await page.bringToFront();",
+      'single-tab selection'
     ],
     [
       "await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });",
-      "result.diagnostics.push('Opening fresh product tab: ' + watch.url);\n  await page.bringToFront();\n  await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });",
+      "result.diagnostics.push('Opening isolated product tab: ' + watch.url);\n  await page.bringToFront();\n  await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });",
       'product navigation'
     ]
   ];
@@ -159,6 +159,23 @@ try {
     }
     source = source.replace(oldText, newText);
   }
+
+  const mergeStart = source.indexOf('  const fullcount = fullcountWatchFromBase(base);');
+  const writeStart = source.indexOf('  await fs.writeFile(RESULT_FILE', mergeStart);
+  if (mergeStart < 0 || writeStart < 0 || writeStart <= mergeStart) {
+    throw new Error('Could not locate the combined-result block in studio-dartisan-watch.mjs.');
+  }
+
+  const isolatedMerge =
+    "  base.environment = 'ordinary-chrome-cdp-studio-" + requested + "-isolated';\n" +
+    "  base.watches = studioResults;\n" +
+    "  base.alert_triggered = Boolean(studioResults.some(item => item.alert_triggered));\n\n" +
+    "  const errors = studioResults\n" +
+    "    .filter(item => item.error)\n" +
+    "    .map(item => item.name + ': ' + String(item.error).split('\\n')[0]);\n" +
+    "  base.error = errors.length ? errors.join(' | ') : null;\n\n";
+
+  source = source.slice(0, mergeStart) + isolatedMerge + source.slice(writeStart);
 
   const generatedPath = path.join(directory, '.studio-' + requested + '-runtime.mjs');
   await fs.writeFile(generatedPath, source);
