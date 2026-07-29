@@ -239,6 +239,20 @@ runtimeSource = replaceBlock(
   'readQuantity'
 );
 
+const mainStart = 'async function main() {\n  await acquireLock();\n  let context;\n  try {\n    const browser = await chromium.connectOverCDP(CDP_ENDPOINT);';
+const mainReplacement = 'async function main() {\n  await acquireLock();\n  let browser;\n  let context;\n  try {\n    browser = await chromium.connectOverCDP(CDP_ENDPOINT);';
+if (!runtimeSource.includes(mainStart)) {
+  throw new Error('Could not locate the Fullcount main/CDP connection block.');
+}
+runtimeSource = runtimeSource.replace(mainStart, mainReplacement);
+
+const finallyStart = "  } finally {\n    await fs.writeFile(path.join(ARTIFACT_DIR, 'result.json'), JSON.stringify(result, null, 2));";
+const finallyReplacement = "  } finally {\n    if (browser) await browser.close().catch(() => {});\n    await fs.writeFile(path.join(ARTIFACT_DIR, 'result.json'), JSON.stringify(result, null, 2));";
+if (!runtimeSource.includes(finallyStart)) {
+  throw new Error('Could not locate the Fullcount final result-write block.');
+}
+runtimeSource = runtimeSource.replace(finallyStart, finallyReplacement);
+
 if (process.env.RAKUTEN_KEEP_ITEM === '1') {
   const cleanupCall = 'await removeVerifiedItem(outcome.page);';
   const occurrences = runtimeSource.split(cleanupCall).length - 1;
