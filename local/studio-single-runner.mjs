@@ -169,14 +169,31 @@ try {
     source = source.replace(oldText, newText);
   }
 
-  const frameAwareSelected = String.raw`async function selected(page, watch, kind) {
-  const pattern = kind === 'size'
-    ? sizeHeadingPattern(watch.size)
-    : colourHeadingPattern(watch.colourAliases);
+  const shadowAwareSelected = String.raw`async function selected(page, watch, kind) {
+  const value = kind === 'size' ? escapeRegExp(watch.size) : null;
+  const patterns = kind === 'size'
+    ? [
+        sizeHeadingPattern(watch.size),
+        new RegExp('(?:商品サイズ|Product\\s*size|SIZE)\\s*[:：]?\\s*(?:(?:サイズ|Size)\\s*)?' + value, 'i')
+      ]
+    : [
+        colourHeadingPattern(watch.colourAliases),
+        new RegExp('(?:COLOR|カラー|色)\\s*[:：]?\\s*(?:' + watch.colourAliases.map(escapeRegExp).join('|') + ')', 'i')
+      ];
 
   for (const frame of page.frames()) {
-    const text = String(await frame.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
-    if (pattern && pattern.test(text)) return true;
+    for (const pattern of patterns.filter(Boolean)) {
+      const candidates = frame.getByText(pattern);
+      const count = await candidates.count().catch(() => 0);
+      for (let index = 0; index < count; index++) {
+        const candidate = candidates.nth(index);
+        try {
+          if (!await candidate.isVisible()) continue;
+          const text = String(await candidate.innerText()).replace(/\s+/g, ' ').trim();
+          if (pattern.test(text)) return true;
+        } catch {}
+      }
+    }
   }
   return false;
 }`;
@@ -187,24 +204,32 @@ try {
   let bestFrameUrl = '';
 
   for (const frame of page.frames()) {
-    const candidates = frame.locator('button,[role="button"],a').filter({
-      hasText: /購入手続きへ|Proceed to purchase|Purchase procedure/i
-    });
+    const candidateSets = [
+      frame.locator('button,[role="button"],a').filter({
+        hasText: /購入手続きへ|Proceed to purchase|Purchase procedure/i
+      }),
+      frame.getByText(/購入手続きへ|Proceed to purchase|Purchase procedure/i)
+    ];
 
-    const count = await candidates.count().catch(() => 0);
-    for (let index = 0; index < count; index++) {
-      const candidate = candidates.nth(index);
-      try {
-        if (!await candidate.isVisible() || !await candidate.isEnabled()) continue;
-        const box = await candidate.boundingBox();
-        if (!box) continue;
-        const area = box.width * box.height;
-        if (area > bestArea) {
-          best = candidate;
-          bestArea = area;
-          bestFrameUrl = frame.url();
-        }
-      } catch {}
+    for (const candidates of candidateSets) {
+      const count = await candidates.count().catch(() => 0);
+      for (let index = 0; index < count; index++) {
+        let candidate = candidates.nth(index);
+        try {
+          if (!await candidate.isVisible()) continue;
+          const clickable = candidate.locator('xpath=ancestor-or-self::*[self::button or self::a or @role="button" or @onclick][1]');
+          if (await clickable.count().catch(() => 0)) candidate = clickable.first();
+          if (!await candidate.isVisible()) continue;
+          const box = await candidate.boundingBox();
+          if (!box) continue;
+          const area = box.width * box.height;
+          if (area > bestArea) {
+            best = candidate;
+            bestArea = area;
+            bestFrameUrl = frame.url();
+          }
+        } catch {}
+      }
     }
   }
 
@@ -225,7 +250,7 @@ try {
     source,
     'async function selected(page, watch, kind) {',
     '\nasync function waitSelected(page, watch, kind, timeout = 7_000) {',
-    frameAwareSelected,
+    shadowAwareSelected,
     'selected verification'
   );
 
