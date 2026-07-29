@@ -39,7 +39,7 @@ function Invoke-CapturedProcess {
         [string]$Label,
         [string]$FilePath,
         [string[]]$Arguments,
-        [int]$TimeoutSeconds = 360
+        [int]$TimeoutSeconds = 480
     )
 
     $SafeLabel = $Label -replace '[^A-Za-z0-9_-]', '-'
@@ -78,28 +78,49 @@ function Invoke-CapturedProcess {
     Add-StepOutput -Path $StdoutPath -Heading "$Label stdout"
     Add-StepOutput -Path $StderrPath -Heading "$Label stderr"
 
-    "[$(Get-Date -Format o)] Step exited with code ${StepExit}: $Label" |
+    ("[{0}] Step exited with code {1}: {2}" -f (Get-Date -Format o), $StepExit, $Label) |
         Out-File -FilePath $RunLogPath -Append -Encoding utf8
 
     return $StepExit
+}
+
+function New-PowerShellArguments {
+    param(
+        [string]$ScriptPath,
+        [string[]]$ExtraArguments = @()
+    )
+
+    $Arguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $ScriptPath
+    )
+    $Arguments += $ExtraArguments
+    if ($KeepItem) {
+        $Arguments += '-KeepItem'
+    }
+    return $Arguments
 }
 
 try {
     $HasMutex = $Mutex.WaitOne(0)
     if (-not $HasMutex) {
         "[$(Get-Date -Format o)] Another validated three-watch run is already active; this invocation was skipped." |
-            Out-File -FilePath $RunLogPath -Encoding utf8
+            Set-Content -Path $LatestLogPath -Encoding utf8
         $ExitCode = 0
         return
     }
 
-    "[$(Get-Date -Format o)] Starting validated Rakuten three-watch run" |
-        Out-File -FilePath $RunLogPath -Encoding utf8
+    $StartMessage = "[$(Get-Date -Format o)] Starting validated Rakuten three-watch run using independently proven wrappers"
+    $StartMessage | Set-Content -Path $RunLogPath -Encoding utf8
+    $StartMessage | Set-Content -Path $LatestLogPath -Encoding utf8
 
+    # Stop only stale monitor Node processes. Chrome itself is deliberately left to
+    # each validated wrapper, which will reuse or restart the CDP browser as needed.
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.Name -eq 'node.exe' -and
-            $_.CommandLine -match 'studio-single-runner|studio-dartisan-watch|\.studio-(8173|8186)-runtime'
+            $_.CommandLine -match 'local-monitor-runner|local-monitor-cdp|studio-single-runner|studio-dartisan-watch|\.studio-(8173|8186)-runtime'
         } |
         ForEach-Object {
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -107,16 +128,7 @@ try {
 
     Start-Sleep -Milliseconds 750
 
-    if ($KeepItem) {
-        $env:RAKUTEN_KEEP_ITEM = '1'
-    }
-    else {
-        Remove-Item Env:RAKUTEN_KEEP_ITEM -ErrorAction SilentlyContinue
-    }
-
-    # Build and syntax-check every validated runtime before touching the basket.
-    # This prevents a later generator error from leaving Chrome on Fullcount's
-    # post-cleanup empty-cart page with no Studio stages attempted.
+    # Preflight every generator and generated runtime before any browser stage.
     $env:RAKUTEN_PATCH_ONLY = '1'
     $GenerateFullcount = Invoke-CapturedProcess `
         -Label 'preflight-generate-fullcount' `
@@ -158,42 +170,50 @@ try {
     Remove-Item '.\artifacts-local\studio-8186-result.json' -Force -ErrorAction SilentlyContinue
     Remove-Item '.\artifacts-local\three-watch-result.json' -Force -ErrorAction SilentlyContinue
 
-    $ChromeExit = Invoke-CapturedProcess `
-        -Label 'start-dedicated-chrome' `
-        -FilePath $PowerShellExe `
-        -Arguments @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass',
-            '-File', (Join-Path $PSScriptRoot 'start-chrome.ps1'),
-            '-Minimized',
-            '-ProductUrl', 'https://item.rakuten.co.jp/realmoon/1110w/'
-        ) `
-        -TimeoutSeconds 60
-
-    if ($ChromeExit -ne 0) {
-        throw "Dedicated Chrome startup failed with exit code $ChromeExit."
-    }
-
+    # Use the exact wrappers that passed in isolation. Each wrapper independently
+    # ensures the dedicated Chrome/CDP endpoint exists before running its watch.
+    $FullcountArguments = New-PowerShellArguments `
+        -ScriptPath (Join-Path $PSScriptRoot 'run-fullcount-only.ps1')
     $FullcountExit = Invoke-CapturedProcess `
-        -Label 'validated-fullcount-1110w-w33' `
-        -FilePath $NodeExe `
-        -Arguments @((Join-Path $PSScriptRoot '.local-monitor-cdp-v2-runtime.mjs'))
+        -Label 'validated-fullcount-1110w-w33-wrapper' `
+        -FilePath $PowerShellExe `
+        -Arguments $FullcountArguments `
+        -TimeoutSeconds 600
 
+    Start-Sleep -Seconds 1
+
+    $Studio8173Arguments = New-PowerShellArguments `
+        -ScriptPath (Join-Path $PSScriptRoot 'run-studio-only.ps1') `
+        -ExtraArguments @('-Watch', '8173')
     $Studio8173Exit = Invoke-CapturedProcess `
-        -Label 'validated-studio-8173-l-white' `
-        -FilePath $NodeExe `
-        -Arguments @((Join-Path $PSScriptRoot '.studio-8173-runtime.mjs'))
+        -Label 'validated-studio-8173-l-white-wrapper' `
+        -FilePath $PowerShellExe `
+        -Arguments $Studio8173Arguments `
+        -TimeoutSeconds 600
 
+    Start-Sleep -Seconds 1
+
+    $Studio8186Arguments = New-PowerShellArguments `
+        -ScriptPath (Join-Path $PSScriptRoot 'run-studio-only.ps1') `
+        -ExtraArguments @('-Watch', '8186')
     $Studio8186Exit = Invoke-CapturedProcess `
-        -Label 'validated-studio-8186-m' `
-        -FilePath $NodeExe `
-        -Arguments @((Join-Path $PSScriptRoot '.studio-8186-runtime.mjs'))
+        -Label 'validated-studio-8186-m-wrapper' `
+        -FilePath $PowerShellExe `
+        -Arguments $Studio8186Arguments `
+        -TimeoutSeconds 600
 
-    # Always attempt the merge. The merger creates a structured combined result
-    # even when one of the three stage files is missing or contains an error.
+    # Always merge, even when a stage failed. The resilient merger will publish a
+    # structured row for every watch so the failure is inspectable.
     $MergeExit = Invoke-CapturedProcess `
         -Label 'merge-three-watch-results' `
         -FilePath $NodeExe `
         -Arguments @((Join-Path $PSScriptRoot 'merge-three-watch-results.mjs'))
+
+    if (-not (Test-Path '.\artifacts-local\three-watch-result.json')) {
+        "[$(Get-Date -Format o)] Merger returned code $MergeExit but three-watch-result.json was not created." |
+            Out-File -FilePath $RunLogPath -Append -Encoding utf8
+        $MergeExit = 126
+    }
 
     $ExitCode = if (
         ($FullcountExit -eq 0) -and
@@ -208,8 +228,6 @@ try {
 catch {
     $_ | Out-String | Out-File -FilePath $RunLogPath -Append -Encoding utf8
 
-    # A preflight or Chrome-start failure occurs before normal stage output.
-    # Still ask the resilient merger to publish an inspectable combined result.
     try {
         Invoke-CapturedProcess `
             -Label 'merge-after-wrapper-error' `
