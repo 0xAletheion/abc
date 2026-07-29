@@ -68,6 +68,15 @@ async function writeGenerationError(error) {
   }, null, 2));
 }
 
+function replaceSourceBlock(input, startMarker, endMarker, replacement, label) {
+  const start = input.indexOf(startMarker);
+  const end = input.indexOf(endMarker, start);
+  if (start < 0 || end < 0 || end <= start) {
+    throw new Error('Could not locate the ' + label + ' block in studio-dartisan-watch.mjs.');
+  }
+  return input.slice(0, start) + replacement + input.slice(end);
+}
+
 await fs.mkdir(artifactDirectory, { recursive: true });
 await fs.writeFile(resultPath, JSON.stringify(startingResult(), null, 2));
 
@@ -159,6 +168,74 @@ try {
     }
     source = source.replace(oldText, newText);
   }
+
+  const frameAwareSelected = String.raw`async function selected(page, watch, kind) {
+  const pattern = kind === 'size'
+    ? sizeHeadingPattern(watch.size)
+    : colourHeadingPattern(watch.colourAliases);
+
+  for (const frame of page.frames()) {
+    const text = String(await frame.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ');
+    if (pattern && pattern.test(text)) return true;
+  }
+  return false;
+}`;
+
+  const frameAwarePurchase = String.raw`async function clickPurchase(page, result) {
+  let best = null;
+  let bestArea = -1;
+  let bestFrameUrl = '';
+
+  for (const frame of page.frames()) {
+    const candidates = frame.locator('button,[role="button"],a').filter({
+      hasText: /購入手続きへ|Proceed to purchase|Purchase procedure/i
+    });
+
+    const count = await candidates.count().catch(() => 0);
+    for (let index = 0; index < count; index++) {
+      const candidate = candidates.nth(index);
+      try {
+        if (!await candidate.isVisible() || !await candidate.isEnabled()) continue;
+        const box = await candidate.boundingBox();
+        if (!box) continue;
+        const area = box.width * box.height;
+        if (area > bestArea) {
+          best = candidate;
+          bestArea = area;
+          bestFrameUrl = frame.url();
+        }
+      } catch {}
+    }
+  }
+
+  if (!best) return false;
+  await best.scrollIntoViewIfNeeded();
+  const box = await best.boundingBox();
+  if (!box) return false;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y, { steps: 10 });
+  await page.mouse.click(x, y, { delay: 120 });
+  result.purchase_button_clicked = true;
+  result.diagnostics.push('Clicked 購入手続きへ in frame ' + bestFrameUrl + ' at ' + Math.round(x) + ',' + Math.round(y) + '.');
+  return true;
+}`;
+
+  source = replaceSourceBlock(
+    source,
+    'async function selected(page, watch, kind) {',
+    '\nasync function waitSelected(page, watch, kind, timeout = 7_000) {',
+    frameAwareSelected,
+    'selected verification'
+  );
+
+  source = replaceSourceBlock(
+    source,
+    'async function clickPurchase(page, result) {',
+    '\nfunction sizeConfirmationPattern(size) {',
+    frameAwarePurchase,
+    'purchase button'
+  );
 
   const mergeStart = source.indexOf('  const fullcount = fullcountWatchFromBase(base);');
   const writeStart = source.indexOf('  await fs.writeFile(RESULT_FILE', mergeStart);
