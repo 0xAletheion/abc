@@ -3,11 +3,50 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(directory, '..');
+const artifactDirectory = path.join(root, 'artifacts-local');
 const requested = String(process.argv[2] || '').trim();
 
 if (!['8173', '8186'].includes(requested)) {
   throw new Error('Usage: node .\\local\\studio-single-runner.mjs 8173|8186');
 }
+
+const watchDefinitions = {
+  '8173': {
+    id: 'studio-dartisan-8173-l-white',
+    name: "Studio D'Artisan 8173 white size L",
+    url: 'https://item.rakuten.co.jp/barbizon/sd8173/?variantId=r-sku00000003',
+    size: 'L',
+    colour: 'white'
+  },
+  '8186': {
+    id: 'studio-dartisan-8186-m',
+    name: "Studio D'Artisan 8186 size M",
+    url: 'https://item.rakuten.co.jp/auc-americanbass/10018065/',
+    size: 'M',
+    colour: null
+  }
+};
+
+const selectedWatch = watchDefinitions[requested];
+const resultPath = path.join(artifactDirectory, 'studio-' + requested + '-result.json');
+
+await fs.mkdir(artifactDirectory, { recursive: true });
+await fs.writeFile(resultPath, JSON.stringify({
+  checked_at: new Date().toISOString(),
+  environment: 'ordinary-chrome-cdp-studio-' + requested + '-isolated-starting',
+  watches: [{
+    id: selectedWatch.id,
+    name: selectedWatch.name,
+    url: selectedWatch.url,
+    target_size: selectedWatch.size,
+    target_colour: selectedWatch.colour,
+    status: 'starting',
+    diagnostics: ['Isolated runner started; waiting to connect to Chrome and open a fresh product tab.'],
+    error: null
+  }],
+  error: null
+}, null, 2));
 
 const sourcePath = path.join(directory, 'studio-dartisan-watch.mjs');
 let source = await fs.readFile(sourcePath, 'utf8');
@@ -70,6 +109,20 @@ source = source.replace(
   "base.environment = 'ordinary-chrome-cdp-three-watch-v5';",
   "base.environment = 'ordinary-chrome-cdp-studio-" + requested + "-isolated';"
 );
+
+const oldPageSelection = "const page = context.pages().find(item => /rakuten\\.co\\.jp/i.test(item.url())) || context.pages()[0] || await context.newPage();";
+const newPageSelection = "const page = await context.newPage();\n    await page.bringToFront();";
+if (!source.includes(oldPageSelection)) {
+  throw new Error('Could not locate the page-selection line in studio-dartisan-watch.mjs.');
+}
+source = source.replace(oldPageSelection, newPageSelection);
+
+const oldGoto = "await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });";
+const newGoto = "result.diagnostics.push('Opening fresh product tab: ' + watch.url);\n  await page.bringToFront();\n  await page.goto(watch.url, { waitUntil: 'domcontentloaded', timeout: 60_000 });";
+if (!source.includes(oldGoto)) {
+  throw new Error('Could not locate the product-navigation line in studio-dartisan-watch.mjs.');
+}
+source = source.replace(oldGoto, newGoto);
 
 const generatedPath = path.join(directory, '.studio-' + requested + '-runtime.mjs');
 await fs.writeFile(generatedPath, source);
