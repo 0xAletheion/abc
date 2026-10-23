@@ -23,7 +23,7 @@ const result = {
   variant_id: variantId,
   target_size: size,
   status: 'unknown',
-  genuinely_available: null,
+  variant_available: null,
   alert_triggered: false,
   source: 'Shopify public product JSON (variant-level available flag)',
   error: null
@@ -68,7 +68,7 @@ try {
 
   result.variant_title = variant.title || null;
   result.status = variant.available ? 'available' : 'unavailable';
-  result.genuinely_available = variant.available;
+  result.variant_available = variant.available;
   if (variant.available) {
     result.alert_triggered = previousState.alert_armed !== false;
     previousState.alert_armed = false;
