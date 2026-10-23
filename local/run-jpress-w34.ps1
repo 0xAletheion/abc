@@ -26,7 +26,7 @@ try {
 
     $Result = Get-Content -Path $ResultPath -Raw | ConvertFrom-Json
     Write-WatchLog ('Status={0}, available={1}, alert={2}, nodeExit={3}, error={4}' -f
-        $Result.status, $Result.genuinely_available, $Result.alert_triggered,
+        $Result.status, $Result.variant_available, $Result.alert_triggered,
         $NodeExit, $Result.error)
 
     if ($Result.alert_triggered -eq $true) {
