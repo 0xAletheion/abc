@@ -14,6 +14,7 @@ const resultFile = path.join(artifacts, 'jpress-w34-result.json');
 const historyFile = path.join(artifacts, 'jpress-w34-history.ndjson');
 const stateFile = path.join(artifacts, 'jpress-w34-state.json');
 const alertFile = path.join(artifacts, 'jpress-w34-alert.txt');
+const acknowledgementFile = path.join(artifacts, 'jpress-w34-ack.json');
 
 await fs.mkdir(artifacts, { recursive: true });
 const result = {
@@ -25,6 +26,8 @@ const result = {
   status: 'unknown',
   variant_available: null,
   alert_triggered: false,
+  notification_pending: false,
+  acknowledged: false,
   source: 'Shopify public product JSON (variant-level available flag)',
   error: null
 };
@@ -70,16 +73,30 @@ try {
   result.status = variant.available ? 'available' : 'unavailable';
   result.variant_available = variant.available;
   if (variant.available) {
-    result.alert_triggered = previousState.alert_armed !== false;
+    // A restock starts a new acknowledgement cycle. A previous acknowledgement
+    // must not suppress the next distinct restock.
+    const newlyAvailable = previousState.alert_armed !== false;
+    result.alert_triggered = newlyAvailable;
+    if (newlyAvailable) await fs.rm(acknowledgementFile, { force: true });
+    let acknowledgement = null;
+    try {
+      acknowledgement = JSON.parse(await fs.readFile(acknowledgementFile, 'utf8'));
+    } catch {}
+    result.acknowledged = acknowledgement?.acknowledged === true &&
+      String(acknowledgement.variant_id) === variantId;
+    // Keep reminding at every scheduled check until the user acknowledges.
+    result.notification_pending = !result.acknowledged;
     previousState.alert_armed = false;
   } else {
     previousState.alert_armed = true;
+    // Re-arm the next restock, even if the user acknowledged this one.
+    await fs.rm(acknowledgementFile, { force: true });
   }
   previousState.last_status = result.status;
   previousState.last_checked_at = result.checked_at;
 
   await fs.writeFile(stateFile, JSON.stringify(previousState, null, 2) + '\n');
-  if (result.alert_triggered) {
+  if (result.notification_pending) {
     await fs.writeFile(
       alertFile,
       'J. Press Ivy Essential Khaki Chino - Trim Fit, W34 reported AVAILABLE\n' +
