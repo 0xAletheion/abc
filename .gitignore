@@ -1,0 +1,5 @@
+node_modules/
+.rakuten-profile/
+artifacts/
+artifacts-local/
+*.log
