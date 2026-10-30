@@ -27,7 +27,7 @@ try {
     # Only one real window can stay open, even after repeated scheduled checks.
     # A separate mutex lets an intentional -Test preview run alongside it.
     $MutexName = if ($Test) { 'Local\JPressW34RestockAlertTest' } else { 'Local\JPressW34RestockAlert' }
-    $Mutex = New-Object System.Threading.Mutex($false, $MutexName)
+    $Mutex = [System.Threading.Mutex]::new($false, $MutexName)
     try {
         $OwnsMutex = $Mutex.WaitOne(0)
     } catch [System.Threading.AbandonedMutexException] {
@@ -73,7 +73,7 @@ try {
     $Form = New-Object System.Windows.Forms.Form
     $Form.Text = if ($Test) { 'TEST - J. Press W34 restock alert' } else { 'J. Press W34 is available' }
     $Form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-    $Form.Size = New-Object System.Drawing.Size(540, 270)
+    $Form.Size = [System.Drawing.Size]::new(540, 270)
     $Form.MinimumSize = $Form.Size
     $Form.MaximumSize = $Form.Size
     $Form.TopMost = $true
@@ -83,7 +83,7 @@ try {
 
     $Title = New-Object System.Windows.Forms.Label
     $Title.Text = if ($Test) { 'TEST ALERT - J. Press Trim Fit W34' } else { 'J. Press Trim Fit W34 is in stock' }
-    $Title.Font = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
+    $Title.Font = [System.Drawing.Font]::new('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
     $Title.AutoSize = $false
     $Title.SetBounds(22, 18, 490, 34)
     $Form.Controls.Add($Title)
@@ -96,7 +96,7 @@ try {
     }
     $Detail.AutoSize = $false
     $Detail.SetBounds(22, 61, 488, 51)
-    $Detail.Font = New-Object System.Drawing.Font('Segoe UI', 10)
+    $Detail.Font = [System.Drawing.Font]::new('Segoe UI', 10)
     $Form.Controls.Add($Detail)
 
     $Reminder = New-Object System.Windows.Forms.Label
@@ -107,7 +107,7 @@ try {
     }
     $Reminder.AutoSize = $false
     $Reminder.SetBounds(22, 113, 488, 40)
-    $Reminder.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $Reminder.Font = [System.Drawing.Font]::new('Segoe UI', 9)
     $Form.Controls.Add($Reminder)
 
     $OpenButton = New-Object System.Windows.Forms.Button
@@ -132,8 +132,7 @@ try {
     $Form.Controls.Add($LaterButton)
 
     $AckButton = New-Object System.Windows.Forms.Button
-    $AckButton.Text = if ($Test) { 'Close test' } else { 'Acknowledge'
-    }
+    $AckButton.Text = if ($Test) { 'Close test' } else { 'Acknowledge' }
     $AckButton.SetBounds(342, 174, 162, 38)
     $AckButton.Add_Click({
         if (-not $Test) {
