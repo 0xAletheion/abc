@@ -29,31 +29,25 @@ try {
         $Result.status, $Result.variant_available, $Result.alert_triggered,
         $NodeExit, $Result.error)
 
-    if ($Result.alert_triggered -eq $true) {
-        Write-WatchLog 'W34 AVAILABLE: attempting Windows notification'
+    if ($Result.notification_pending -eq $true) {
+        Write-WatchLog 'W34 AVAILABLE and unacknowledged: launching persistent alert window'
         try {
-            Add-Type -AssemblyName System.Windows.Forms
-            Add-Type -AssemblyName System.Drawing
-            $Notice = New-Object System.Windows.Forms.NotifyIcon
-            try {
-                $Notice.Icon = [System.Drawing.SystemIcons]::Information
-                $Notice.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
-                $Notice.BalloonTipTitle = 'J. Press Trim W34 in stock'
-                $Notice.BalloonTipText = 'J. Press Ivy Essential Khaki Chino, Trim W34: check the website now.'
-                $Notice.Visible = $true
-                [System.Media.SystemSounds]::Exclamation.Play()
-                $Notice.ShowBalloonTip(10000)
-                Start-Sleep -Seconds 12
+            $AlertScript = Join-Path $PSScriptRoot 'jpress-w34-alert-window.ps1'
+            if (-not (Test-Path $AlertScript)) {
+                throw "Alert window script is missing: $AlertScript"
             }
-            finally {
-                $Notice.Dispose()
-            }
+            # Launch independently: the scheduler task can complete normally while
+            # the user's visible alert stays open for as long as necessary.
+            $AlertArguments = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $AlertScript
+            Start-Process -FilePath 'powershell.exe' -ArgumentList $AlertArguments | Out-Null
+            Write-WatchLog 'Persistent restock alert process started (desktop visibility requires an interactive session)'
         }
         catch {
-            Write-WatchLog ('Windows notification unavailable: ' + $_.Exception.Message)
+            Write-WatchLog ('Persistent Windows alert could not be started: ' + $_.Exception.Message)
         }
-        Write-Host 'J. Press W34 AVAILABLE. See artifacts-local\jpress-w34-alert.txt.'
+        Write-Host 'J. Press W34 AVAILABLE and unacknowledged. See artifacts-local\jpress-w34-alert.txt.'
     }
+
     exit $NodeExit
 }
 catch {
